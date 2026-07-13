@@ -7,12 +7,31 @@ import {
 } from "lucide-react";
 import {
   addWorkspace, chooseDirectory, desktopAction, initializeSystem, listThreads, loadOverview,
-  previewSync, removeWorkspace, setCaptureMode, switchLayoutLanguage, writeSync
+  previewSync, removeWorkspace, reviewKnowledge, setAutoWatch, setCaptureMode, switchLayoutLanguage, writeSync
 } from "./api";
 import { getCopy, type AppLocale, type Copy } from "./i18n";
 import type { ArtifactRecord, OverviewData, ProjectRecord, ViewId } from "./types";
 
 type ThreadRecord = { id: string; name: string; preview: string; cwd: string; updatedAt: string | null };
+type ReviewAction = "validate" | "archive" | "supersede";
+type ListenerState = "listening" | "scanning" | "paused" | "manual" | "error";
+
+function formatDate(value: string | null | undefined, locale: AppLocale) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
+function actionableReports(reports: Array<Record<string, any>>) {
+  const unique = new Map<string, Record<string, any>>();
+  for (const report of reports) {
+    const threadId = report.source?.thread_id;
+    const turnId = report.source?.turn_id;
+    if (!threadId || !turnId || !(report.obsidian_write_plan?.length)) continue;
+    unique.set(`${threadId}:${turnId}`, report);
+  }
+  return [...unique.values()];
+}
 
 const nav = [
   ["overview", CircleGauge], ["projects", Folder], ["conversations", MessageSquareText],
@@ -46,6 +65,8 @@ function Overview({ data, c, selectProject, sync, syncing, refresh, openSettings
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const conflictCount = data.artifacts.filter(item => item.status === "conflict" || item.knowledgeOperation === "conflict").length || data.artifactsByStatus.conflict || 0;
+  const userContentTypes = new Set(["source", "conversation", "learning_summary", "knowledge", "prompt", "output", "decision"]);
+  const recentWrites = data.activity.filter(item => ["created", "updated", "validated", "archived", "superseded"].includes(item.outcome) && userContentTypes.has(item.artifactType)).slice(0, 6);
   return <>
     <Header title={c.overview.title} subtitle={c.overview.subtitle}>
       <button className="button" onClick={() => desktopAction("open_obsidian")}><FolderOpen size={18} />{c.common.openObsidian}</button>
@@ -60,7 +81,7 @@ function Overview({ data, c, selectProject, sync, syncing, refresh, openSettings
       </div>
     </Header>
     <section className="metrics">
-      <Metric icon={Folder} label={c.overview.projects} value={data.projectsCount} hint={`${data.workspaceMappings.length} ${c.overview.projectsHint}`} />
+      <Metric icon={Folder} label={c.overview.projects} value={data.workspaceMappings.length} hint={`${data.projectsCount} ${c.overview.projectsHint}`} />
       <Metric icon={MessageSquareText} label={c.overview.conversations} value={data.artifactsByType.conversation ?? data.artifactsByType.source ?? 0} hint={c.overview.conversationsHint} tone="blue" />
       <Metric icon={ListChecks} label={c.overview.candidates} value={data.artifactsByStatus.candidate ?? 0} hint={c.overview.candidatesHint} tone="amber" />
       <Metric icon={AlertTriangle} label={c.overview.conflicts} value={conflictCount} hint={conflictCount ? c.overview.conflictsNow : c.overview.noConflicts} tone="red" />
@@ -68,11 +89,11 @@ function Overview({ data, c, selectProject, sync, syncing, refresh, openSettings
     <section className="overview-grid">
       <div className="surface project-table"><div className="section-heading"><div><h2>{c.overview.recentProjects}</h2><p>{c.overview.recentProjectsHint}</p></div><button className="text-button" onClick={openProjects}>{c.overview.viewAll}<ChevronRight size={16} /></button></div>
         <div className="table-scroll"><table><thead><tr><th>{c.overview.projectName}</th><th>{c.overview.sourcePath}</th><th>{c.overview.lastRead}</th><th>{c.overview.content}</th><th>{c.common.status}</th></tr></thead><tbody>
-          {data.projects.map(project => <tr key={project.path} onClick={() => selectProject(project)}><td><span className="project-name"><Folder size={18} />{project.name}</span></td><td className="path-cell">{project.sourcePath ?? project.path}</td><td>{project.updatedAt}</td><td>{project.totalArtifacts}</td><td><Status value={project.status} c={c} /></td></tr>)}
+          {data.projects.map(project => <tr key={project.path} onClick={() => selectProject(project)}><td><span className="project-name"><Folder size={18} />{project.name}</span></td><td className="path-cell">{project.sourcePath ?? c.projects.noSource}</td><td>{formatDate(project.updatedAt, data.locale)}</td><td>{project.totalArtifacts}</td><td><Status value={project.status} c={c} /></td></tr>)}
         </tbody></table></div>
       </div>
       <div className="surface activity-panel"><div className="section-heading"><div><h2>{c.overview.recentWrites}</h2><p>{c.overview.recentWritesHint}</p></div></div>
-        <div className="activity-list">{data.activity.slice(0, 6).map(item => <div className="activity-item" key={item.eventId}><div className={`activity-icon ${item.knowledgeOperation === "conflict" ? "danger" : ""}`}>{item.artifactType === "learning_summary" ? <BookOpen size={18} /> : item.artifactType === "knowledge" ? <Library size={18} /> : <MessageSquareText size={18} />}</div><div><strong>{typeLabel(c, item.artifactType)}</strong><span>{item.target.split("/").slice(-2).join(" / ")}</span></div><time>{item.occurredAt}</time></div>)}</div>
+        <div className="activity-list">{recentWrites.length ? recentWrites.map(item => <div className="activity-item" key={item.eventId}><div className={`activity-icon ${item.knowledgeOperation === "conflict" ? "danger" : ""}`}>{item.artifactType === "learning_summary" ? <BookOpen size={18} /> : item.artifactType === "knowledge" ? <Library size={18} /> : <MessageSquareText size={18} />}</div><div><strong>{typeLabel(c, item.artifactType)}</strong><span>{item.target.split("/").slice(-2).join(" / ")}</span></div><time>{formatDate(item.occurredAt, data.locale)}</time></div>) : <Empty>{c.sync.empty}</Empty>}</div>
       </div>
     </section>
   </>;
@@ -87,7 +108,7 @@ function ArtifactPage({ data, c, type, title, subtitle, selectArtifact }: { data
   const aliases = type === "conversation" ? ["conversation", "source"] : [type];
   const normalized = query.trim().toLocaleLowerCase();
   const items = data.artifacts.filter(item => aliases.includes(item.type) && (!normalized || `${item.title} ${item.project ?? ""} ${item.path}`.toLocaleLowerCase().includes(normalized)));
-  return <><Header title={title} subtitle={subtitle}><label className="search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`${c.artifacts.search} ${title}`} /></label></Header><div className="surface artifact-list">{items.length ? items.map(item => <button key={item.path} className="artifact-row" onClick={() => selectArtifact(item)}><div className="artifact-symbol">{type === "conversation" ? <MessageSquareText size={20} /> : <BookOpen size={20} />}</div><div><strong>{item.title}</strong><span>{item.project} · {item.path}</span></div><div className="artifact-meta"><Status value={item.status ?? "active"} c={c} /><time>{item.updatedAt}</time></div><ChevronRight size={18} /></button>) : <Empty>{c.artifacts.empty} {title}</Empty>}</div></>;
+  return <><Header title={title} subtitle={subtitle}><label className="search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`${c.artifacts.search} ${title}`} /></label></Header><div className="surface artifact-list">{items.length ? items.map(item => <button key={item.path} className="artifact-row" onClick={() => selectArtifact(item)}><div className="artifact-symbol">{type === "conversation" ? <MessageSquareText size={20} /> : <BookOpen size={20} />}</div><div><strong>{item.title}</strong><span>{item.project} · {item.path}</span></div><div className="artifact-meta"><Status value={item.status ?? "active"} c={c} /><time>{formatDate(item.updatedAt, data.locale)}</time></div><ChevronRight size={18} /></button>) : <Empty>{c.artifacts.empty} {title}</Empty>}</div></>;
 }
 
 function Knowledge({ data, c, selectArtifact }: { data: OverviewData; c: Copy; selectArtifact: (a: ArtifactRecord) => void }) {
@@ -102,7 +123,7 @@ function ActivityPage({ data, c }: { data: OverviewData; c: Copy }) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data.activity, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `oca-duplex-activity-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url);
   }
-  return <><Header title={c.activity.title} subtitle={c.activity.subtitle}><button className="button" onClick={exportActivity}><FileOutput size={18} />{c.activity.export}</button></Header><div className="surface audit-table"><table><thead><tr><th>{c.activity.time}</th><th>{c.activity.operation}</th><th>{c.activity.type}</th><th>{c.activity.target}</th><th>{c.activity.result}</th><th>{c.activity.transaction}</th></tr></thead><tbody>{data.activity.map(item => <tr key={item.eventId}><td>{item.occurredAt}</td><td>{item.operation}</td><td>{typeLabel(c, item.artifactType)}</td><td className="path-cell">{item.target}</td><td><Status value={item.outcome} c={c} /></td><td><code>{item.transactionId}</code></td></tr>)}</tbody></table></div></>;
+  return <><Header title={c.activity.title} subtitle={c.activity.subtitle}><button className="button" onClick={exportActivity}><FileOutput size={18} />{c.activity.export}</button></Header><div className="surface audit-table"><table><thead><tr><th>{c.activity.time}</th><th>{c.activity.operation}</th><th>{c.activity.type}</th><th>{c.activity.target}</th><th>{c.activity.result}</th><th>{c.activity.transaction}</th></tr></thead><tbody>{data.activity.map(item => <tr key={item.eventId}><td>{formatDate(item.occurredAt, data.locale)}</td><td>{item.operation}</td><td>{typeLabel(c, item.artifactType)}</td><td className="path-cell">{item.target}</td><td><Status value={item.outcome} c={c} /></td><td><code>{item.transactionId}</code></td></tr>)}</tbody></table></div></>;
 }
 
 function SettingsPage({ data, c, reload }: { data: OverviewData; c: Copy; reload: () => Promise<void> }) {
@@ -128,17 +149,21 @@ function SettingsPage({ data, c, reload }: { data: OverviewData; c: Copy; reload
   return <><Header title={c.settings.title} subtitle={c.settings.subtitle}>{busy && <LoaderCircle className="spin" size={19} />}</Header>{message && <div className="settings-message"><AlertTriangle size={18} /><span>{message}</span></div>}<div className="settings-grid">
     <section className="surface settings-card"><div className="settings-icon"><ShieldCheck /></div><div><h2>{c.settings.modeTitle}</h2><p>{c.settings.modeDescription}</p><div className="segmented"><button className={data.mode === "safe" ? "active" : ""} onClick={() => run(() => setCaptureMode("safe"))}>{c.settings.safe}</button><button className={data.mode === "manual" ? "active" : ""} onClick={() => run(() => setCaptureMode("manual"))}>{c.settings.manual}</button><button className={data.mode === "all" ? "active" : ""} onClick={() => run(() => setCaptureMode("all"))}>{c.settings.all}</button></div><small>{data.mode === "safe" ? c.settings.safeDescription : data.mode === "manual" ? c.settings.manualDescription : c.settings.allDescription}</small></div></section>
     <section className="surface settings-card"><div className="settings-icon"><Languages /></div><div><h2>{c.settings.languageTitle}</h2><p>{c.settings.languageDescription}</p><div className="segmented"><button className={data.locale === "zh-CN" ? "active" : ""} onClick={() => language("zh-CN")}>{c.settings.chinese}</button><button className={data.locale === "en-US" ? "active" : ""} onClick={() => language("en-US")}>{c.settings.english}</button></div></div></section>
+    <section className="surface settings-card"><div className="settings-icon"><RefreshCw /></div><div><h2>{c.settings.autoWatchTitle}</h2><p>{c.settings.autoWatchDescription}</p><div className="segmented"><button className={data.autoWatch ? "active" : ""} onClick={() => run(() => setAutoWatch(true))}>{c.settings.autoWatchOn}</button><button className={!data.autoWatch ? "active" : ""} onClick={() => run(() => setAutoWatch(false))}>{c.settings.autoWatchOff}</button></div>{data.mode === "manual" && <small>{c.settings.autoWatchManual}</small>}</div></section>
     <section className="surface settings-card workspace-card"><div className="settings-icon"><Folder /></div><div><h2>{c.settings.workspaceTitle}</h2><p>{c.settings.workspaceDescription}</p><div className="workspace-list">{data.workspaceMappings.length ? data.workspaceMappings.map(item => <div className="workspace-row" key={item.path}><div><strong>{item.project}</strong><code>{item.path}</code></div><button className="danger-button" onClick={() => run(() => removeWorkspace(item.path))}><Trash2 size={16} />{c.common.remove}</button></div>) : <div className="workspace-empty">{c.settings.noWorkspaces}</div>}</div><div className="workspace-add"><label><span>{c.settings.workspacePath}</span><div><input value={workspacePath} onChange={event => setWorkspacePath(event.target.value)} /><button onClick={pick}>{c.common.browse}</button></div></label><label><span>{c.settings.projectName}</span><input value={project} onChange={event => setProject(event.target.value)} placeholder={c.settings.projectPlaceholder} /></label><button className="button primary" disabled={!workspacePath.trim() || !project.trim() || busy} onClick={add}><Plus size={17} />{c.common.add}</button></div></div></section>
     <section className="surface settings-card"><div className={`settings-icon ${data.integration?.available ? "" : "warning"}`}><Bot /></div><div><h2>{c.settings.integrationTitle}</h2><p>{data.integration?.available ? c.settings.integrationReady : c.settings.integrationMissing}</p><div className="integration-status"><Status value={data.integration?.available ? "validated" : "conflict"} c={c} /><div><code>{data.integration?.version ?? data.integration?.detail ?? "codex.exe"}</code><code className="integration-path">{data.integration?.command ?? "codex.exe"}</code></div></div><small>{c.settings.integrationHint}</small></div></section>
     <section className="surface settings-card"><div className="settings-icon"><Waypoints /></div><div><h2>{c.settings.vaultTitle}</h2><p className="settings-path">{data.vaultRoot}</p><small>{c.settings.vaultHint}</small></div></section>
   </div></>;
 }
 
-function Inspector({ project, artifact, data, c }: { project: ProjectRecord | null; artifact: ArtifactRecord | null; data: OverviewData; c: Copy }) {
+function Inspector({ project, artifact, data, c, reviewing, review, reviewProject }: { project: ProjectRecord | null; artifact: ArtifactRecord | null; data: OverviewData; c: Copy; reviewing: boolean; review: (artifact: ArtifactRecord, action: ReviewAction) => void; reviewProject: () => void }) {
   const title = artifact?.title ?? project?.name ?? c.inspector.title;
-  const path = artifact?.path ?? project?.sourcePath ?? data.vaultRoot;
+  const path = artifact?.path ?? project?.path ?? data.vaultRoot;
   const folders = [c.types.conversation, c.types.learning_summary, c.nav.knowledge, c.types.prompt, c.types.output, c.types.decision, c.nav.activity];
-  return <aside className="inspector"><div className="inspector-header"><div className="inspector-mark">{artifact ? <BookOpen size={21} /> : <Bot size={21} />}</div><div><h2>{title}</h2><p>{artifact ? `${c.inspector.artifactInspector} · ${typeLabel(c, artifact.type)}` : project ? c.inspector.projectInspector : c.inspector.title}</p></div><span className="health-dot" /></div><section><label>{c.common.path}</label><code>{path}</code></section>{artifact ? <><section><label>{c.inspector.knowledgeStatus}</label><Status value={artifact.status ?? "active"} c={c} /></section><section><label>{c.inspector.sourceTask}</label><code>{artifact.sourceThreadId ?? c.common.none}</code></section></> : <section><label>{c.inspector.vaultStructure}</label><div className="folder-tree"><b><Folder size={17} />{project?.name ?? c.inspector.project}</b>{folders.map(item => <span key={item}>{item}</span>)}</div></section>}<section><label>{c.inspector.recentTransaction}</label><code>{data.activity[0]?.transactionId ?? c.common.none} · {c.statuses.completed}</code></section><button className="button primary inspector-action" onClick={() => desktopAction("open_artifact", { path })}><FolderOpen size={18} />{c.inspector.open}</button></aside>;
+  const canValidate = artifact?.type === "knowledge" && ["candidate", "conflict"].includes(artifact.status ?? "");
+  const canArchive = artifact?.type === "knowledge" && ["candidate", "validated", "conflict"].includes(artifact.status ?? "");
+  const pendingCount = project ? data.artifacts.filter(item => item.project === project.name && ["candidate", "conflict"].includes(item.status ?? "")).length : 0;
+  return <aside className="inspector"><div className="inspector-header"><div className="inspector-mark">{artifact ? <BookOpen size={21} /> : <Bot size={21} />}</div><div><h2>{title}</h2><p>{artifact ? `${c.inspector.artifactInspector} · ${typeLabel(c, artifact.type)}` : project ? c.inspector.projectInspector : c.inspector.title}</p></div><span className="health-dot" /></div><section><label>{c.inspector.targetPath}</label><code>{path}</code></section>{project && <section><label>{c.inspector.sourceWorkspace}</label><code>{project.sourcePath ?? c.projects.noSource}</code></section>}{artifact ? <><section><label>{c.inspector.knowledgeStatus}</label><Status value={artifact.status ?? "active"} c={c} /></section><section><label>{c.inspector.sourceTask}</label><code>{artifact.sourceThreadId ?? c.common.none}</code></section>{artifact.type === "knowledge" && <div className="review-actions">{canValidate && <button className="button primary" disabled={reviewing} onClick={() => review(artifact, "validate")}><Check size={17}/>{c.knowledge.validate}</button>}{canArchive && <button className="button danger" disabled={reviewing} onClick={() => review(artifact, artifact.status === "validated" ? "supersede" : "archive")}><Archive size={17}/>{artifact.status === "validated" ? c.knowledge.markSuperseded : c.knowledge.archive}</button>}</div>}</> : <><section><label>{c.inspector.vaultStructure}</label><div className="folder-tree"><b><Folder size={17} />{project?.name ?? c.inspector.project}</b>{folders.map(item => <span key={item}>{item}</span>)}</div></section>{pendingCount > 0 && <button className="button review-project" onClick={reviewProject}><ListChecks size={17}/>{pendingCount} · {c.knowledge.reviewProject}</button>}</>}<section><label>{c.inspector.recentTransaction}</label><code>{data.activity[0]?.transactionId ?? c.common.none} · {c.statuses.completed}</code></section><button className="button primary inspector-action" onClick={() => desktopAction("open_artifact", { path })}><FolderOpen size={18} />{c.inspector.open}</button></aside>;
 }
 
 function SetupWizard({ complete }: { complete: () => Promise<void> }) {
@@ -173,6 +198,10 @@ function ThreadPicker({ threads, loading, close, preview, c }: { threads: Thread
   return <div className="modal-backdrop"><section className="thread-modal"><div className="modal-heading"><div><h2>{c.picker.title}</h2><p>{c.picker.subtitle}</p></div><button className="icon-button" onClick={close}><X size={19}/></button></div><div className="thread-list">{loading ? <div className="thread-loading"><LoaderCircle className="spin" />{c.picker.loading}</div> : threads.length ? threads.map(thread => <button key={thread.id} className={selected.includes(thread.id) ? "selected" : ""} onClick={() => toggle(thread.id)}><span className="thread-check">{selected.includes(thread.id) && <Check size={15}/>}</span><div><strong>{thread.name || thread.preview || thread.id}</strong><code>{thread.cwd || thread.id}</code></div></button>) : <Empty>{c.picker.empty}</Empty>}</div><div className="modal-actions"><button className="button" onClick={close}>{c.common.cancel}</button><button className="button primary" disabled={loading || selected.length === 0} onClick={() => preview(selected)}>{c.picker.preview}</button></div></section></div>;
 }
 
+function Notice({ tone, title, message, close }: { tone: "success" | "info"; title: string; message: string; close: () => void }) {
+  return <div className={`toast-notice ${tone}`}><Check size={19}/><div><b>{title}</b><span>{message}</span></div><button onClick={close}><X size={17}/></button></div>;
+}
+
 export default function App() {
   const [view, setView] = useState<ViewId>("overview");
   const [data, setData] = useState<OverviewData | null>(null);
@@ -186,23 +215,60 @@ export default function App() {
   const [threadPicker, setThreadPicker] = useState(false);
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
-  async function reload() { setError(null); try { const result = await loadOverview(); setData(result); setSelectedProject(current => current ? result.projects.find(item => item.path === current.path) ?? null : result.projects[0] ?? null); setNeedsSetup(false); } catch (reason) { const text = String(reason); if (/config|配置|Vault|找不到/i.test(text)) setNeedsSetup(true); else setError(text); } }
+  const [reviewing, setReviewing] = useState(false);
+  const [notice, setNotice] = useState<{ tone: "success" | "info"; title: string; message: string } | null>(null);
+  const [listenerState, setListenerState] = useState<ListenerState>("paused");
+  const [lastScanAt, setLastScanAt] = useState<string | null>(null);
+  async function reload() { setError(null); try { const result = await loadOverview(); setData(result); setSelectedProject(current => current ? result.projects.find(item => item.path === current.path) ?? null : result.projects[0] ?? null); setSelectedArtifact(current => current ? result.artifacts.find(item => item.path === current.path) ?? null : null); setNeedsSetup(false); } catch (reason) { const text = String(reason); if (/config|配置|Vault|找不到/i.test(text)) setNeedsSetup(true); else setError(text); } }
   useEffect(() => { reload(); }, []);
   const locale = data?.locale ?? "zh-CN";
   const c = getCopy(locale);
   const systemLabel = useMemo(() => data?.mode === "safe" ? c.settings.safe : data?.mode === "manual" ? c.settings.manual : c.settings.all, [data?.mode, c]);
-  async function runPreview(ids: string[] = []) { setSyncing(true); setSyncError(null); try { const result = await previewSync(ids); setThreadPicker(false); setSyncReports(result.reports); } catch (reason) { setSyncError(String(reason)); } finally { setSyncing(false); } }
+  useEffect(() => {
+    if (!data) return;
+    if (data.mode === "manual") { setListenerState("manual"); return; }
+    if (!data.autoWatch || !data.integration?.available) { setListenerState("paused"); return; }
+    let disposed = false;
+    const timer = window.setTimeout(async () => {
+      if (syncing || syncReports || threadPicker) return;
+      setListenerState("scanning");
+      try {
+        const result = await previewSync();
+        if (disposed) return;
+        const reports = actionableReports(result.reports);
+        setLastScanAt(new Date().toISOString());
+        if (reports.length) {
+          setSyncReports(reports);
+          setNotice({ tone: "info", title: c.sync.title, message: c.sync.autoFound });
+        }
+        setListenerState("listening");
+      } catch {
+        if (!disposed) setListenerState("error");
+      }
+    }, Math.max(5000, data.pollIntervalMs ?? 10000));
+    setListenerState("listening");
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [data?.mode, data?.autoWatch, data?.pollIntervalMs, data?.integration?.available, syncing, Boolean(syncReports), threadPicker, c]);
+  async function runPreview(ids: string[] = []) { setSyncing(true); setSyncError(null); setNotice(null); try { const result = await previewSync(ids); const reports = actionableReports(result.reports); setThreadPicker(false); setLastScanAt(new Date().toISOString()); if (reports.length) setSyncReports(reports); else { setSyncReports(null); setNotice({ tone: "info", title: c.common.syncNow, message: c.sync.noNew }); } } catch (reason) { setSyncError(String(reason)); } finally { setSyncing(false); } }
   async function sync() {
     if (data?.mode !== "manual") return runPreview();
     setThreadPicker(true); setThreadsLoading(true); setSyncError(null);
     try { setThreads(await listThreads()); } catch (reason) { setThreadPicker(false); setSyncError(String(reason)); } finally { setThreadsLoading(false); }
   }
-  async function confirmSync() { if (!syncReports) return; setSyncing(true); try { const ids = syncReports.map(report => report.source?.thread_id).filter(Boolean); await writeSync(ids); setSyncReports(null); await reload(); } catch (reason) { setSyncError(String(reason)); } finally { setSyncing(false); } }
+  async function confirmSync() { if (!syncReports) return; setSyncing(true); setSyncError(null); try { const ids = [...new Set(syncReports.map(report => report.source?.thread_id).filter(Boolean))] as string[]; const turnIds = [...new Set(syncReports.map(report => report.source?.turn_id).filter(Boolean))] as string[]; const result = await writeSync(ids, turnIds); const changed = result.reports.flatMap(report => (report as any).write_results ?? []).filter((item: any) => ["created", "updated"].includes(item.outcome)).length; setSyncReports(null); setNotice({ tone: "success", title: c.sync.success, message: `${c.sync.successDetail} ${changed} ${c.sync.changedFiles}` }); await reload(); } catch (reason) { setSyncError(String(reason)); } finally { setSyncing(false); } }
+  async function reviewArtifact(artifact: ArtifactRecord, action: ReviewAction) {
+    if (action !== "validate" && !window.confirm(action === "archive" ? c.knowledge.archive : c.knowledge.markSuperseded)) return;
+    setReviewing(true); setSyncError(null);
+    try { await reviewKnowledge(artifact.path, action, artifact.updatedAt); await reload(); setNotice({ tone: "success", title: c.knowledge.reviewed, message: artifact.title }); }
+    catch (reason) { setSyncError(String(reason)); }
+    finally { setReviewing(false); }
+  }
   if (error) return <div className="fatal"><AlertTriangle /><h1>{c.fatal}</h1><p>{error}</p></div>;
   if (needsSetup) return <SetupWizard complete={reload} />;
   if (!data) return <div className="loading"><LoaderCircle className="spin" /><span>{c.loading}</span></div>;
   const openSettings = () => setView("settings");
-  return <><div className="shell"><aside className="sidebar"><div className="brand"><div className="brand-mark"><Waypoints size={21} /></div><div><strong>OCA-Duplex</strong><span>{c.brand}</span></div></div><nav>{nav.map(([id, Icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={20} /><span>{c.nav[id]}</span>{id === "knowledge" && (data.artifactsByStatus.candidate ?? 0) > 0 && <em>{data.artifactsByStatus.candidate}</em>}</button>)}</nav><div className="system-card"><div><ShieldCheck size={19} /><span>{systemLabel}</span></div><strong><i />{c.system.running}</strong><small>{data.workspaceMappings.length} {c.system.authorized}</small><small className={data.integration?.available ? "integration-ok" : "integration-warning"}>{data.integration?.available ? c.system.ready : c.system.attention}</small></div></aside><main className="content">
+  const listenerLabel = listenerState === "scanning" ? c.system.scanning : listenerState === "listening" ? c.system.listening : listenerState === "manual" ? c.system.manual : listenerState === "error" ? c.system.attention : c.system.paused;
+  return <><div className="shell"><aside className="sidebar"><div className="brand"><div className="brand-mark"><Waypoints size={21} /></div><div><strong>OCA-Duplex</strong><span>{c.brand}</span></div></div><nav>{nav.map(([id, Icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={20} /><span>{c.nav[id]}</span>{id === "knowledge" && (data.artifactsByStatus.candidate ?? 0) > 0 && <em>{data.artifactsByStatus.candidate}</em>}</button>)}</nav><div className="system-card"><div><ShieldCheck size={19} /><span>{systemLabel}</span></div><strong><i className={listenerState === "error" ? "error" : listenerState === "paused" || listenerState === "manual" ? "paused" : ""}/>{listenerLabel}</strong><small>{data.workspaceMappings.length} {c.system.authorized}</small>{lastScanAt && <small>{c.system.lastScan}：{formatDate(lastScanAt, locale)}</small>}<small className={data.integration?.available ? "integration-ok" : "integration-warning"}>{data.integration?.available ? c.system.ready : c.system.attention}</small></div></aside><main className="content">
     {view === "overview" && <Overview data={data} c={c} selectProject={project => { setSelectedProject(project); setSelectedArtifact(null); }} sync={sync} syncing={syncing} refresh={reload} openSettings={openSettings} openProjects={() => setView("projects")} />}
     {view === "projects" && <Projects data={data} c={c} selectProject={project => { setSelectedProject(project); setSelectedArtifact(null); }} add={openSettings} />}
     {view === "conversations" && <ArtifactPage data={data} c={c} type="conversation" title={c.artifacts.conversationsTitle} subtitle={c.artifacts.conversationsSubtitle} selectArtifact={artifact => { setSelectedArtifact(artifact); setSelectedProject(null); }} />}
@@ -210,8 +276,9 @@ export default function App() {
     {view === "knowledge" && <Knowledge data={data} c={c} selectArtifact={artifact => { setSelectedArtifact(artifact); setSelectedProject(null); }} />}
     {view === "activity" && <ActivityPage data={data} c={c} />}
     {view === "settings" && <SettingsPage data={data} c={c} reload={reload} />}
-  </main><Inspector project={selectedProject} artifact={selectedArtifact} data={data} c={c} /></div>
+  </main><Inspector project={selectedProject} artifact={selectedArtifact} data={data} c={c} reviewing={reviewing} review={reviewArtifact} reviewProject={() => setView("knowledge")} /></div>
   {threadPicker && <ThreadPicker threads={threads} loading={threadsLoading} close={() => setThreadPicker(false)} preview={runPreview} c={c} />}
   {syncReports && <SyncReview reports={syncReports} busy={syncing} close={() => setSyncReports(null)} confirm={confirmSync} c={c} />}
+  {notice && <Notice {...notice} close={() => setNotice(null)} />}
   {syncError && <div className="toast-error"><AlertTriangle size={19}/><div><b>{c.sync.failed}</b><span>{syncError}</span></div><button onClick={() => setSyncError(null)}><X size={17}/></button></div>}</>;
 }

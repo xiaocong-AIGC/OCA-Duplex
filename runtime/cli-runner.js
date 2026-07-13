@@ -28,6 +28,7 @@ export function parseArgs(argv) {
     write: false,
     commit: false,
     threadIds: [],
+    turnIds: [],
     turnLimit: null,
     configPath: path.join(projectRoot, "config.json")
   };
@@ -40,6 +41,7 @@ export function parseArgs(argv) {
     else if (arg === "--write") result.write = true;
     else if (arg === "--commit") result.commit = true;
     else if (arg === "--thread") result.threadIds.push(argv[++index]);
+    else if (arg === "--turn") result.turnIds.push(argv[++index]);
     else if (arg === "--turn-limit") result.turnLimit = Number.parseInt(argv[++index], 10);
     else if (arg === "--config") result.configPath = path.resolve(argv[++index]);
     else if (arg === "--help" || arg === "-h") result.help = true;
@@ -118,7 +120,11 @@ export async function runCli(argv = process.argv.slice(2), io = {}) {
 
   const processSnapshots = async (snapshots) => {
     confirmController?.scanning();
-    const selected = tracker.selectSnapshots(snapshots, turnLimit);
+    const requestedTurns = new Set(args.turnIds.filter(Boolean));
+    const eligible = requestedTurns.size
+      ? snapshots.filter((snapshot) => requestedTurns.has(snapshot.turn.id))
+      : snapshots;
+    const selected = tracker.selectSnapshots(eligible, turnLimit);
     if (selected.length === 0) {
       if (confirmController) confirmController.notifyNoUpdates();
       else if (!args.watch) {
@@ -131,6 +137,7 @@ export async function runCli(argv = process.argv.slice(2), io = {}) {
       return;
     }
     for (const snapshot of selected) {
+      if (tracker.context.hasProcessed(snapshot.turn.id)) continue;
       if (confirmController) {
         const decision = await confirmController.handle(snapshot);
         if (decision.action === "quit") {

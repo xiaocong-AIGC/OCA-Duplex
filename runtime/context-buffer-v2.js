@@ -48,7 +48,12 @@ export class ContextBuffer {
   }
 
   select(snapshots, limit = 1) {
-    return snapshots
+    const unique = new Map();
+    for (const snapshot of snapshots) {
+      const key = `${snapshot.thread.id}:${snapshot.turn.id}`;
+      if (!unique.has(key)) unique.set(key, snapshot);
+    }
+    return [...unique.values()]
       .filter((snapshot) => !this.processedTurns.has(snapshot.turn.id))
       .sort((left, right) => String(left.turn.completed_at ?? "").localeCompare(String(right.turn.completed_at ?? "")))
       .slice(0, limit);

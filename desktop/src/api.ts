@@ -44,14 +44,19 @@ export async function previewSync(threadIds: string[] = []) {
   return requestDesktop<{ mode: string; reports: Array<Record<string, unknown>> }>("sync.preview", { limit: 5, threadIds });
 }
 
-export async function writeSync(threadIds: string[]) {
+export async function writeSync(threadIds: string[], turnIds: string[]) {
   if (!("__TAURI_INTERNALS__" in window)) return { mode: "write", reports: [] };
-  return requestDesktop<{ mode: string; reports: Array<Record<string, unknown>> }>("sync.write", { limit: 5, threadIds });
+  return requestDesktop<{ mode: string; reports: Array<Record<string, unknown>> }>("sync.write", { limit: Math.max(5, turnIds.length), threadIds, turnIds });
 }
 
 export async function setCaptureMode(mode: "safe" | "manual" | "all") {
   if (!("__TAURI_INTERNALS__" in window)) return { mode };
   return requestDesktop<{ mode: string }>("settings.set_mode", { mode });
+}
+
+export async function setAutoWatch(enabled: boolean) {
+  if (!("__TAURI_INTERNALS__" in window)) return { enabled };
+  return requestDesktop<{ enabled: boolean }>("settings.set_auto_watch", { enabled });
 }
 
 export async function listThreads() {
@@ -68,6 +73,11 @@ export async function addWorkspace(path: string, project: string) {
 export async function removeWorkspace(path: string) {
   if (!("__TAURI_INTERNALS__" in window)) return { workspaces: [] };
   return requestDesktop<{ workspaces: Array<{ path: string; project: string }> }>("settings.remove_workspace", { path });
+}
+
+export async function reviewKnowledge(path: string, action: "validate" | "archive" | "supersede", expectedUpdatedAt: string) {
+  if (!("__TAURI_INTERNALS__" in window)) return { path, action };
+  return requestDesktop("knowledge.review", { path, action, expectedUpdatedAt });
 }
 
 export async function switchLayoutLanguage(locale: "zh-CN" | "en-US") {

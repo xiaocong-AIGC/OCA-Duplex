@@ -17,6 +17,7 @@ export interface ArtifactRecord {
   status: string | null;
   project: string | null;
   sourceThreadId: string | null;
+  sourceTurnId: string | null;
   knowledgeOperation: string | null;
   updatedAt: string;
 }
@@ -35,6 +36,8 @@ export interface ActivityRecord {
 
 export interface OverviewData {
   mode: "safe" | "manual" | "all";
+  autoWatch: boolean;
+  pollIntervalMs: number;
   locale: "zh-CN" | "en-US";
   vaultRoot: string;
   projectsCount: number;

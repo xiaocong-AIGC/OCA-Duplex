@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { projectSubdirs, projectsRoot } from "../vault/path-map.js";
 import { configPathForVault, defaultConfig, normalizeWorkspaceEntry, saveConfig } from "./config.js";
 import { normalizeLocale } from "../vault/layout-profiles.js";
 import { applyLayoutMigrationPlan, buildLayoutMigrationPlan } from "../vault/layout-migration.js";
 import { resolveAppServerCommand } from "./app-server-client.js";
 import { commandText, runLocalCommand } from "./process-info.js";
+import { appendAuditEvents, beginWriteTransaction, completeWriteTransaction, rollbackWriteTransaction } from "../core/write-transaction.js";
+import { resolveWithinVault } from "../core/writer.js";
 
 function integrationStatus(config) {
   const command = resolveAppServerCommand(config.appServer.command ?? "codex");
@@ -50,6 +53,66 @@ function frontmatter(content) {
     result[key] = value === "null" ? null : value;
   }
   return result;
+}
+
+function setFrontmatterValues(content, values) {
+  const match = String(content).match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) throw new Error("该文件没有可管理的 YAML frontmatter。");
+  let header = match[1];
+  for (const [key, value] of Object.entries(values)) {
+    const rendered = `${key}: ${String(value).replace(/\r?\n/g, " ")}`;
+    const pattern = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:.*$`, "m");
+    header = pattern.test(header) ? header.replace(pattern, rendered) : `${header}\n${rendered}`;
+  }
+  return `---\n${header}\n---${content.slice(match[0].length)}`;
+}
+
+async function reviewKnowledge(config, params) {
+  const relativePath = String(params.path ?? "").replace(/\\/g, "/");
+  const action = String(params.action ?? "");
+  const nextStatus = { validate: "validated", archive: "archived", supersede: "superseded" }[action];
+  if (!nextStatus) throw new Error(`不支持的知识审核操作：${action}`);
+  const absolutePath = resolveWithinVault(config.vaultRoot, relativePath);
+  const stat = await fs.stat(absolutePath);
+  if (params.expectedUpdatedAt && stat.mtime.toISOString() !== params.expectedUpdatedAt) {
+    throw new Error("该知识文件已被其他程序修改，请刷新后重新审核。");
+  }
+  const content = await fs.readFile(absolutePath, "utf8");
+  const metadata = frontmatter(content);
+  if (metadata.type !== "knowledge" || metadata.oca_managed !== "true") {
+    throw new Error("只能在应用内审核由 OCA-Duplex 管理的知识文件。");
+  }
+  const allowed = action === "validate" ? ["candidate", "conflict"] : ["candidate", "validated", "conflict"];
+  if (!allowed.includes(metadata.status)) throw new Error(`当前状态 ${metadata.status ?? "未知"} 不能执行此操作。`);
+  const reviewedAt = new Date().toISOString();
+  const updated = setFrontmatterValues(content, {
+    status: nextStatus,
+    reviewed_at: reviewedAt,
+    reviewed_by: "desktop-user",
+    review_action: action
+  });
+  const transaction = await beginWriteTransaction([{ target: relativePath }], config);
+  try {
+    const temporary = `${absolutePath}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, updated, "utf8");
+    await fs.rename(temporary, absolutePath);
+    const result = {
+      operation: `knowledge_${action}`,
+      type: "knowledge",
+      target: relativePath,
+      outcome: nextStatus,
+      source_thread_id: metadata.source_thread_id ?? null,
+      source_turn_id: metadata.source_turn_id ?? null,
+      project_root: metadata.project ? `${projectsRoot(config)}/${metadata.project}` : null,
+      knowledge_operation: action
+    };
+    await appendAuditEvents(config, transaction.id, [result]);
+    await completeWriteTransaction(transaction);
+    return { ...result, reviewed_at: reviewedAt };
+  } catch (error) {
+    await rollbackWriteTransaction(transaction, config, error);
+    throw error;
+  }
 }
 
 async function countMarkdown(directory) {
@@ -136,6 +199,8 @@ export async function desktopOverview(config) {
   });
   return {
     mode: config.capture.mode,
+    auto_watch: config.capture.autoWatch !== false,
+    poll_interval_ms: config.capture.pollIntervalMs ?? 10000,
     locale: config.locale,
     vault_root: config.vaultRoot,
     projects_count: projects.length,
@@ -183,6 +248,11 @@ export async function handleDesktopRequest(config, request) {
     await saveConfig(configPathForVault(config.vaultRoot), config);
     return { mode: params.mode };
   }
+  if (request.method === "settings.set_auto_watch") {
+    config.capture.autoWatch = Boolean(params.enabled);
+    await saveConfig(configPathForVault(config.vaultRoot), config);
+    return { enabled: config.capture.autoWatch };
+  }
   if (request.method === "settings.add_workspace") {
     const entry = normalizeWorkspaceEntry(params);
     const key = process.platform === "win32" ? entry.path.toLowerCase() : entry.path;
@@ -214,6 +284,7 @@ export async function handleDesktopRequest(config, request) {
     if (!plan.ready) return { applied: false, conflicts: plan.conflicts };
     return applyLayoutMigrationPlan(configPath, plan);
   }
+  if (request.method === "knowledge.review") return reviewKnowledge(config, params);
   if (request.method === "system.overview") return desktopOverview(config);
   if (request.method === "projects.list") return listDesktopProjects(config);
   if (request.method === "artifacts.list") return listDesktopArtifacts(config, params);

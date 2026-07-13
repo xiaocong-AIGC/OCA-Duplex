@@ -24,5 +24,12 @@ test("desktop settings add and remove workspace mappings", async () => {
     params: { path: secondPath }
   });
   assert.equal(removed.workspaces.some((entry) => entry.project === "Second Project"), false);
+
+  const watch = await handleDesktopRequest(config, {
+    method: "settings.set_auto_watch",
+    params: { enabled: false }
+  });
+  assert.equal(watch.enabled, false);
+  assert.equal(config.capture.autoWatch, false);
   await fs.rm(vaultRoot, { recursive: true, force: true });
 });

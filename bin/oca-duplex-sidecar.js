@@ -36,7 +36,8 @@ async function execute(request, explicitPath) {
   if (["sync.preview", "sync.write"].includes(request.method)) {
     let text = "";
     const cliArgs = ["--once", request.method === "sync.write" ? "--write" : "--dry-run", "--turn-limit", String(request.params?.limit ?? 5), "--config", configPath];
-    for (const threadId of request.params?.threadIds ?? []) cliArgs.push("--thread", threadId);
+    for (const threadId of new Set((request.params?.threadIds ?? []).filter(Boolean))) cliArgs.push("--thread", threadId);
+    for (const turnId of new Set((request.params?.turnIds ?? []).filter(Boolean))) cliArgs.push("--turn", turnId);
     await runCli(cliArgs, {
       output: { write(value) { text += String(value); return true; } }
     });

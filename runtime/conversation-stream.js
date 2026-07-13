@@ -21,7 +21,7 @@ export class ConversationStream {
   }
 
   async selectThreads(explicitThreadIds = []) {
-    if (explicitThreadIds.length > 0) return explicitThreadIds;
+    if (explicitThreadIds.length > 0) return [...new Set(explicitThreadIds.filter(Boolean))];
     if ((this.config.capture.mode ?? "safe") === "manual") {
       throw new Error("当前是手动模式。请使用 --thread <任务ID>，或运行 oca-duplex threads 查看任务。");
     }
@@ -50,7 +50,12 @@ export class ConversationStream {
       const thread = await this.readThread(threadId);
       snapshots.push(...normalizeThread(thread, this.config.capture));
     }
-    return snapshots;
+    const unique = new Map();
+    for (const snapshot of snapshots) {
+      const key = `${snapshot.thread.id}:${snapshot.turn.id}`;
+      if (!unique.has(key)) unique.set(key, snapshot);
+    }
+    return [...unique.values()];
   }
 
   async watch(onSnapshots, { threadIds = [], signal } = {}) {

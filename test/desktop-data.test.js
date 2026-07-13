@@ -6,6 +6,7 @@ import path from "node:path";
 import { executeWritePlan } from "../core/writer.js";
 import { desktopOverview, handleDesktopRequest, listDesktopActivity, listDesktopArtifacts, listDesktopProjects } from "../runtime/desktop-data.js";
 import { defaultConfig } from "../runtime/config.js";
+import { ContextBuffer } from "../runtime/context-buffer.js";
 
 async function tempConfig() {
   const vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oca-desktop-data-"));
@@ -49,5 +50,37 @@ test("desktop data API reports projects, artifacts, mappings, and audit activity
   assert.equal(overview.workspace_mappings[0].project, "测试");
   const response = await handleDesktopRequest(config, { method: "artifacts.list", params: { project: "测试" } });
   assert.equal(response[0].source_thread_id, "thread-api");
+  await fs.rm(config.vaultRoot, { recursive: true, force: true });
+});
+
+test("runtime selection deduplicates repeated thread and turn snapshots", async () => {
+  const config = await tempConfig();
+  const context = new ContextBuffer(config);
+  await context.load();
+  const snapshot = { thread: { id: "thread-duplicate" }, turn: { id: "turn-duplicate", completed_at: "2026-07-13T01:00:00.000Z" } };
+  assert.equal(context.select([snapshot, snapshot], 5).length, 1);
+  context.record({ threadId: "thread-duplicate", turnId: "turn-duplicate", mode: "write" });
+  assert.equal(context.select([snapshot], 5).length, 0);
+  await fs.rm(config.vaultRoot, { recursive: true, force: true });
+});
+
+test("desktop knowledge review validates a managed candidate and records audit metadata", async () => {
+  const config = await tempConfig();
+  const target = "项目/审核测试/知识库/候选规则.md";
+  const content = [
+    "---", "schema_version: 2", "type: knowledge", "status: candidate", "project: 审核测试",
+    "source_thread_id: thread-review", "source_turn_id: turn-review", "oca_managed: true", "---",
+    "", "# 候选规则", ""
+  ].join("\n");
+  await executeWritePlan([{ operation: "create_if_absent", type: "knowledge", target, project_root: "项目/审核测试", source_thread_id: "thread-review", source_turn_id: "turn-review", content }], config);
+  const before = (await listDesktopArtifacts(config, { project: "审核测试" }))[0];
+  const result = await handleDesktopRequest(config, { method: "knowledge.review", params: { path: target, action: "validate", expectedUpdatedAt: before.updated_at } });
+  assert.equal(result.outcome, "validated");
+  const updated = await fs.readFile(path.join(config.vaultRoot, target), "utf8");
+  assert.match(updated, /^status: validated$/m);
+  assert.match(updated, /^reviewed_at: /m);
+  const activity = await listDesktopActivity(config);
+  assert.equal(activity[0].operation, "knowledge_validate");
+  assert.equal(activity[0].outcome, "validated");
   await fs.rm(config.vaultRoot, { recursive: true, force: true });
 });

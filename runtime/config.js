@@ -11,7 +11,7 @@ export function configPathForVault(vaultRoot) {
 export function defaultConfig(vaultRoot, locale = "zh-CN") {
   const root = path.resolve(vaultRoot);
   const config = {
-    version: "1.0.0-beta.1",
+    version: "1.0.0-beta.2",
     vaultRoot: root,
     appServer: {
       command: "codex",
@@ -24,6 +24,7 @@ export function defaultConfig(vaultRoot, locale = "zh-CN") {
     capture: {
       mode: "safe",
       workspaces: [],
+      autoWatch: true,
       pollIntervalMs: 10000,
       heartbeatMs: 60000,
       newestThreads: 50,

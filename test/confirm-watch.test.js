@@ -233,3 +233,9 @@ test("CLI accepts watch confirm and rejects unsafe combinations", () => {
   assert.throws(() => parseArgs(["--confirm"]), /requires --watch/);
   assert.throws(() => parseArgs(["--watch", "--confirm", "--write"]), /controls write and commit/);
 });
+
+test("CLI accepts exact turn filters for two-phase desktop confirmation", () => {
+  const args = parseArgs(["--once", "--thread", "thread-1", "--turn", "turn-1", "--turn", "turn-2"]);
+  assert.deepEqual(args.threadIds, ["thread-1"]);
+  assert.deepEqual(args.turnIds, ["turn-1", "turn-2"]);
+});

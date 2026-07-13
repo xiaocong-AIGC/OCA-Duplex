@@ -120,7 +120,7 @@ export class AppServerClient extends EventEmitter {
     const capabilities = this.options.experimentalApi ? { experimentalApi: true } : undefined;
     try {
       await this.request("initialize", {
-        clientInfo: { name: "oca-duplex", title: "OCA-Duplex", version: "1.0.0-beta.1" },
+        clientInfo: { name: "oca-duplex", title: "OCA-Duplex", version: "1.0.0-beta.2" },
         ...(capabilities ? { capabilities } : {})
       });
     } catch (error) {

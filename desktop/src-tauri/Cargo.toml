@@ -1,6 +1,6 @@
 [package]
 name = "oca-duplex-desktop"
-version = "0.3.1"
+version = "0.4.0"
 description = "Privacy-first Codex to Obsidian knowledge manager"
 authors = ["OCA-Duplex contributors"]
 license = "Apache-2.0"
