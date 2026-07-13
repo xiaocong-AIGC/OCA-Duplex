@@ -1,0 +1,46 @@
+{
+  "name": "oca-duplex",
+  "version": "1.0.0-beta.1",
+  "description": "Route local Codex conversations from multiple projects into a personal Obsidian Vault.",
+  "type": "module",
+  "bin": {
+    "oca-duplex": "bin/oca-duplex.js",
+    "oca-duplex-sidecar": "bin/oca-duplex-sidecar.js"
+  },
+  "files": [
+    "bin/",
+    "commands/",
+    "core/",
+    "index.js",
+    "runtime/",
+    "scripts/",
+    "vault/",
+    "templates/",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "test": "node --test --test-isolation=none",
+    "start": "node bin/oca-duplex.js",
+    "doctor": "node bin/oca-duplex.js doctor",
+    "pack:check": "npm pack --dry-run --json",
+    "build:sidecar": "node scripts/build-sidecar.mjs",
+    "test:sidecar": "node scripts/smoke-sidecar.mjs",
+    "build:desktop": "npm run build:sidecar && npm --prefix desktop run tauri build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "postject": "^1.0.0-alpha.6"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "codex",
+    "obsidian",
+    "knowledge-management",
+    "cli"
+  ],
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,38 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm ci
+        working-directory: desktop
+      - run: npm test
+      - run: npm run build:sidecar
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: OCA-Duplex ${{ github.ref_name }}
+          releaseBody: |
+            Windows x64 desktop installer for OCA-Duplex.
+
+            Requirements: install and sign in to the ChatGPT desktop app with Codex (or a compatible Codex CLI). Obsidian is recommended for opening the generated Vault content.
+          releaseDraft: true
+          prerelease: true

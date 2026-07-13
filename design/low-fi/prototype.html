@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OCA-Duplex 低保真原型</title>
+  <style>
+    :root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #20242a; background: #f2f3f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button { font: inherit; cursor: pointer; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 232px minmax(720px, 1fr) 320px; }
+    .sidebar { padding: 24px 16px; background: #25282d; color: white; }
+    .brand { padding: 0 12px 22px; font-weight: 800; letter-spacing: .02em; }
+    .brand small { display: block; margin-top: 6px; color: #aeb4bd; font-weight: 400; }
+    .nav { display: grid; gap: 6px; }
+    .nav button { border: 0; border-radius: 8px; padding: 11px 12px; color: #cbd0d7; background: transparent; text-align: left; }
+    .nav button.active, .nav button:hover { color: white; background: #3b3f46; }
+    .mode { margin-top: 28px; padding: 14px; border: 1px solid #4b5059; border-radius: 10px; color: #d8dce2; }
+    .mode strong { display: flex; align-items: center; gap: 8px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #73a57b; }
+    main { padding: 28px 30px; overflow: auto; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: 26px; }
+    .muted { color: #707680; font-size: 13px; }
+    .actions { display: flex; gap: 10px; }
+    .btn { border: 1px solid #c8cbd0; border-radius: 8px; padding: 9px 13px; background: white; }
+    .btn.primary { color: white; border-color: #34383f; background: #34383f; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 12px; }
+    .card, .panel { border: 1px solid #d7d9dd; border-radius: 12px; background: white; }
+    .card { padding: 17px; }
+    .card b { display: block; margin-top: 12px; font-size: 27px; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); gap: 14px; margin-top: 14px; }
+    .panel { padding: 18px; }
+    .panel h2 { margin: 0 0 4px; font-size: 16px; }
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 11px 8px; border-bottom: 1px solid #eceef0; text-align: left; }
+    th { color: #747a83; font-weight: 600; }
+    tr[data-project] { cursor: pointer; }
+    tr[data-project]:hover { background: #f7f8f9; }
+    .pill { display: inline-block; border: 1px solid #c9cdd2; border-radius: 999px; padding: 3px 8px; font-size: 12px; }
+    .pill.warn { background: #f4f1e9; }
+    .timeline { margin-top: 14px; display: grid; gap: 15px; }
+    .event { display: grid; grid-template-columns: 10px 1fr; gap: 10px; }
+    .event i { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #737982; }
+    .event b { display: block; font-size: 13px; }
+    .event span { color: #747a83; font-size: 12px; }
+    .inspector { padding: 24px 20px; border-left: 1px solid #d7d9dd; background: #fafafa; }
+    .inspector h2 { margin: 0 0 18px; font-size: 18px; }
+    .detail { padding: 14px 0; border-top: 1px solid #dedfe2; }
+    .detail label { display: block; margin-bottom: 6px; color: #777d86; font-size: 12px; }
+    .detail code { font-size: 12px; white-space: normal; word-break: break-all; }
+    .tree { display: grid; gap: 7px; font-size: 13px; }
+    .tree div { padding-left: 12px; }
+    .tree .root { padding-left: 0; font-weight: 700; }
+    .view { display: none; }
+    .view.active { display: block; }
+    @media (max-width: 1100px) { .app { grid-template-columns: 210px 1fr; } .inspector { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">OCA-Duplex<small>Codex × Obsidian</small></div>
+      <nav class="nav">
+        <button class="active" data-view="overview">总览</button>
+        <button data-view="projects">项目</button>
+        <button data-view="conversations">原始对话</button>
+        <button data-view="summaries">学习总结</button>
+        <button data-view="knowledge">知识库</button>
+        <button data-view="activity">活动记录</button>
+        <button data-view="settings">设置</button>
+      </nav>
+      <div class="mode"><strong><span class="dot"></span>系统运行中</strong><p class="muted">安全模式 · 4 个授权项目</p></div>
+    </aside>
+
+    <main>
+      <section id="overview" class="view active">
+        <header class="topbar">
+          <div><h1>知识工作台</h1><div class="muted">清楚看到读取了什么、写入了什么、哪些需要确认</div></div>
+          <div class="actions"><button class="btn">打开 Obsidian</button><button class="btn primary">立即同步</button></div>
+        </header>
+        <div class="cards">
+          <div class="card"><span class="muted">授权项目</span><b>4</b></div>
+          <div class="card"><span class="muted">本周新对话</span><b>12</b></div>
+          <div class="card"><span class="muted">候选知识</span><b>6</b></div>
+          <div class="card"><span class="muted">待处理冲突</span><b>2</b></div>
+        </div>
+        <div class="grid">
+          <section class="panel">
+            <h2>最近读取的项目</h2><div class="muted">仅显示已授权的工作目录</div>
+            <table>
+              <thead><tr><th>项目</th><th>目录</th><th>最近同步</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr data-project="OCA-Duplex"><td>OCA-Duplex</td><td>D:\知识库</td><td>刚刚</td><td><span class="pill">已同步</span></td></tr>
+                <tr data-project="AI 漫剧"><td>AI 漫剧</td><td>D:\AI漫剧</td><td>18 分钟前</td><td><span class="pill warn">3 项待确认</span></td></tr>
+                <tr data-project="个人网站"><td>个人网站</td><td>D:\Sites\Portfolio</td><td>昨天</td><td><span class="pill">已同步</span></td></tr>
+              </tbody>
+            </table>
+          </section>
+          <section class="panel">
+            <h2>最近写入</h2><div class="muted">每一步都有审计记录与事务编号</div>
+            <div class="timeline">
+              <div class="event"><i></i><div><b>更新学习总结</b><span>OCA-Duplex · 1 分钟前</span></div></div>
+              <div class="event"><i></i><div><b>新增候选知识</b><span>目录语言迁移规则 · 2 分钟前</span></div></div>
+              <div class="event"><i></i><div><b>追加原始对话</b><span>Codex 任务 019f4ab6 · 2 分钟前</span></div></div>
+              <div class="event"><i></i><div><b>发现知识冲突</b><span>安全模式说明 · 7 分钟前</span></div></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="projects" class="view"><header class="topbar"><div><h1>项目</h1><div class="muted">工作目录与 Obsidian 项目一一映射</div></div><button class="btn primary">添加项目</button></header><section class="panel"><h2>OCA-Duplex</h2><p>原始对话 18 · 学习总结 5 · 候选知识 9 · 输出成果 4</p></section></section>
+      <section id="conversations" class="view"><header class="topbar"><h1>原始对话</h1></header><section class="panel"><h2>按 Codex 任务聚合</h2><p>同一任务的多轮消息只保存在同一份原始对话中。</p></section></section>
+      <section id="summaries" class="view"><header class="topbar"><h1>学习总结</h1></header><section class="panel"><h2>持续更新</h2><p>每个任务一份总结，包含当前结论与按轮次记录的学习历程。</p></section></section>
+      <section id="knowledge" class="view"><header class="topbar"><h1>知识库</h1></header><section class="panel"><h2>候选 6 · 已验证 23 · 冲突 2 · 已替代 4</h2><p>知识操作：新增、更新、合并、冲突、替代。</p></section></section>
+      <section id="activity" class="view"><header class="topbar"><h1>活动记录</h1></header><section class="panel"><h2>审计日志</h2><p>显示时间、项目、任务、操作、目标文件、结果和事务编号，不显示正文。</p></section></section>
+      <section id="settings" class="view"><header class="topbar"><h1>设置</h1></header><section class="panel"><h2>安全与目录</h2><p>安全模式 / 手动模式 / 全部模式 · 纯中文 / English · Vault 路径 · Obsidian 启动方式</p></section></section>
+    </main>
+
+    <aside class="inspector">
+      <h2 id="inspect-title">OCA-Duplex</h2>
+      <div class="detail"><label>工作目录</label><code id="inspect-path">D:\知识库</code></div>
+      <div class="detail"><label>写入结构</label><div class="tree"><div class="root">项目/OCA-Duplex</div><div>原始对话</div><div>学习总结</div><div>知识库</div><div>提示词</div><div>输出成果</div><div>决策记录</div><div>同步记录</div></div></div>
+      <div class="detail"><label>最近事务</label><code>tx_8f21… · complete</code></div>
+      <button class="btn primary" style="width:100%">在 Obsidian 中打开</button>
+    </aside>
+  </div>
+  <script>
+    const nav = [...document.querySelectorAll('[data-view]')];
+    nav.forEach(button => button.addEventListener('click', () => {
+      nav.forEach(item => item.classList.toggle('active', item === button));
+      document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === button.dataset.view));
+    }));
+    document.querySelectorAll('[data-project]').forEach(row => row.addEventListener('click', () => {
+      document.querySelector('#inspect-title').textContent = row.dataset.project;
+      document.querySelector('#inspect-path').textContent = row.children[1].textContent;
+    }));
+  </script>
+</body>
+</html>

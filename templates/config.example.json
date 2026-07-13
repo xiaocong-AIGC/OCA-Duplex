@@ -1,0 +1,32 @@
+{
+  "version": "1.0.0-beta.1",
+  "locale": "zh-CN",
+  "layoutProfile": "zh-CN",
+  "vaultRoot": "D:\\YourObsidianVault",
+  "appServer": {
+    "command": "codex",
+    "args": ["app-server", "--stdio"],
+    "requestTimeoutMs": 45000,
+    "experimentalApi": false,
+    "minimumCodexVersion": "0.120.0",
+    "testedCodexVersion": "0.142.0"
+  },
+  "capture": {
+    "mode": "safe",
+    "workspaces": [
+      { "path": "D:\\ProjectA", "project": "项目A" },
+      { "path": "D:\\ProjectB", "project": "项目B" }
+    ],
+    "newestThreads": 50,
+    "includeArchived": false,
+    "includeToolResults": false,
+    "completedTurnsOnly": true,
+    "maxTurnsPerCycle": 5
+  },
+  "content": {
+    "schemaVersion": 2,
+    "oneConversationPerThread": true,
+    "oneLearningSummaryPerThread": true,
+    "knowledgeDefaultState": "candidate"
+  }
+}
