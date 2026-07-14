@@ -11,7 +11,7 @@ export function configPathForVault(vaultRoot) {
 export function defaultConfig(vaultRoot, locale = "zh-CN") {
   const root = path.resolve(vaultRoot);
   const config = {
-    version: "1.0.0-beta.2",
+    version: "1.0.0-beta.3",
     vaultRoot: root,
     appServer: {
       command: "codex",
@@ -30,6 +30,7 @@ export function defaultConfig(vaultRoot, locale = "zh-CN") {
       newestThreads: 50,
       includeArchived: false,
       includeToolResults: false,
+      includeReasoningSummaries: false,
       maxToolOutputChars: 2000,
       completedTurnsOnly: true,
       maxTurnsPerCycle: 5
@@ -62,6 +63,8 @@ export function defaultConfig(vaultRoot, locale = "zh-CN") {
       enabled: false,
       commit: false,
       maxDerivedNotesPerTurn: 3,
+      generateProjectHome: false,
+      generateMaintenanceFiles: false,
       conversationSourceFolder: "30_来源/Codex对话记录",
       commitMessage: "oca-duplex: sync Codex knowledge"
     },

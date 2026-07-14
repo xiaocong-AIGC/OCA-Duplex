@@ -51,7 +51,7 @@ function heuristicName(text) {
   const quoted = value.match(/[“"《]([^”"》]{2,24})[”"》]/u)?.[1];
   if (quoted && !/如何|要求|目标|输出|规则|方法总结|知识系统/.test(quoted) && !GENERIC_PROJECT_PATTERN.test(quoted)) return sanitizeFilename(quoted, "", 24);
   const named = value.match(/(?:项目|产品|应用|Agent|agent)\s*[：:]?\s*([A-Za-z][A-Za-z0-9 _-]{1,22}|[\p{Script=Han}A-Za-z0-9 _-]{2,20})/u)?.[1];
-  if (!named || GENERIC_PROJECT_PATTERN.test(named.trim())) return null;
+  if (!named || /^(?:的|中|内|里|上|下|每个|所有|当前|这个|该|我们|相关)/u.test(named.trim()) || GENERIC_PROJECT_PATTERN.test(named.trim())) return null;
   return sanitizeFilename(named, "", 24);
 }
 

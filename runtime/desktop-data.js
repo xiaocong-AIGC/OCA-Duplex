@@ -41,6 +41,17 @@ async function walkMarkdown(directory) {
   return files;
 }
 
+async function readPrefix(filePath, maximumBytes = 16384) {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(maximumBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maximumBytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 function frontmatter(content) {
   const match = String(content).match(/^---\s*\n([\s\S]*?)\n---/);
   if (!match) return {};
@@ -53,6 +64,10 @@ function frontmatter(content) {
     result[key] = value === "null" ? null : value;
   }
   return result;
+}
+
+function isOcaArtifactMetadata(metadata) {
+  return metadata.oca_managed === "true" || Boolean(metadata.artifact_id && metadata.oca_version);
 }
 
 function setFrontmatterValues(content, values) {
@@ -116,7 +131,12 @@ async function reviewKnowledge(config, params) {
 }
 
 async function countMarkdown(directory) {
-  return (await walkMarkdown(directory)).length;
+  let count = 0;
+  for (const filePath of await walkMarkdown(directory)) {
+    const metadata = frontmatter(await readPrefix(filePath));
+    if (isOcaArtifactMetadata(metadata)) count += 1;
+  }
+  return count;
 }
 
 export async function listDesktopProjects(config) {
@@ -146,8 +166,9 @@ export async function listDesktopArtifacts(config, { project = null, type = null
     : path.join(config.vaultRoot, projectsRoot(config));
   const artifacts = [];
   for (const filePath of await walkMarkdown(base)) {
-    const content = await fs.readFile(filePath, "utf8");
+    const content = await readPrefix(filePath);
     const metadata = frontmatter(content);
+    if (!isOcaArtifactMetadata(metadata)) continue;
     if (type && metadata.type !== type) continue;
     const stat = await fs.stat(filePath);
     artifacts.push({

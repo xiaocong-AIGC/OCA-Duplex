@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, AlertTriangle, Archive, BookOpen, Bot, Check, ChevronRight, CircleGauge,
   FileOutput, Folder, FolderOpen, GitMerge, Languages, Library, ListChecks, LoaderCircle,
@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import {
   addWorkspace, chooseDirectory, desktopAction, initializeSystem, listThreads, loadOverview,
-  previewSync, removeWorkspace, reviewKnowledge, setAutoWatch, setCaptureMode, switchLayoutLanguage, writeSync
+  previewSync, removeWorkspace, resetHistory, reviewKnowledge, setAutoWatch, setCaptureMode, skipSync, switchLayoutLanguage, writeSync
 } from "./api";
 import { getCopy, type AppLocale, type Copy } from "./i18n";
 import type { ArtifactRecord, OverviewData, ProjectRecord, ViewId } from "./types";
@@ -15,6 +15,7 @@ import type { ArtifactRecord, OverviewData, ProjectRecord, ViewId } from "./type
 type ThreadRecord = { id: string; name: string; preview: string; cwd: string; updatedAt: string | null };
 type ReviewAction = "validate" | "archive" | "supersede";
 type ListenerState = "listening" | "scanning" | "paused" | "manual" | "error";
+type MonitorEvent = { id: string; at: string; tone: "info" | "success" | "warning"; title: string; detail: string };
 
 function formatDate(value: string | null | undefined, locale: AppLocale) {
   if (!value) return "—";
@@ -146,6 +147,16 @@ function SettingsPage({ data, c, reload }: { data: OverviewData; c: Copy; reload
     if (!workspacePath.trim() || !project.trim()) return;
     await run(async () => { await addWorkspace(workspacePath, project); setWorkspacePath(""); setProject(""); });
   }
+  async function clearHistory() {
+    if (!window.confirm(c.settings.resetConfirm)) return;
+    setBusy(true); setMessage(null);
+    try {
+      const result = await resetHistory();
+      setMessage(`${c.settings.resetDone}：${result.deletedCount} / ${result.baselineTurns}`);
+      await reload();
+    } catch (reason) { setMessage(String(reason)); }
+    finally { setBusy(false); }
+  }
   return <><Header title={c.settings.title} subtitle={c.settings.subtitle}>{busy && <LoaderCircle className="spin" size={19} />}</Header>{message && <div className="settings-message"><AlertTriangle size={18} /><span>{message}</span></div>}<div className="settings-grid">
     <section className="surface settings-card"><div className="settings-icon"><ShieldCheck /></div><div><h2>{c.settings.modeTitle}</h2><p>{c.settings.modeDescription}</p><div className="segmented"><button className={data.mode === "safe" ? "active" : ""} onClick={() => run(() => setCaptureMode("safe"))}>{c.settings.safe}</button><button className={data.mode === "manual" ? "active" : ""} onClick={() => run(() => setCaptureMode("manual"))}>{c.settings.manual}</button><button className={data.mode === "all" ? "active" : ""} onClick={() => run(() => setCaptureMode("all"))}>{c.settings.all}</button></div><small>{data.mode === "safe" ? c.settings.safeDescription : data.mode === "manual" ? c.settings.manualDescription : c.settings.allDescription}</small></div></section>
     <section className="surface settings-card"><div className="settings-icon"><Languages /></div><div><h2>{c.settings.languageTitle}</h2><p>{c.settings.languageDescription}</p><div className="segmented"><button className={data.locale === "zh-CN" ? "active" : ""} onClick={() => language("zh-CN")}>{c.settings.chinese}</button><button className={data.locale === "en-US" ? "active" : ""} onClick={() => language("en-US")}>{c.settings.english}</button></div></div></section>
@@ -153,6 +164,7 @@ function SettingsPage({ data, c, reload }: { data: OverviewData; c: Copy; reload
     <section className="surface settings-card workspace-card"><div className="settings-icon"><Folder /></div><div><h2>{c.settings.workspaceTitle}</h2><p>{c.settings.workspaceDescription}</p><div className="workspace-list">{data.workspaceMappings.length ? data.workspaceMappings.map(item => <div className="workspace-row" key={item.path}><div><strong>{item.project}</strong><code>{item.path}</code></div><button className="danger-button" onClick={() => run(() => removeWorkspace(item.path))}><Trash2 size={16} />{c.common.remove}</button></div>) : <div className="workspace-empty">{c.settings.noWorkspaces}</div>}</div><div className="workspace-add"><label><span>{c.settings.workspacePath}</span><div><input value={workspacePath} onChange={event => setWorkspacePath(event.target.value)} /><button onClick={pick}>{c.common.browse}</button></div></label><label><span>{c.settings.projectName}</span><input value={project} onChange={event => setProject(event.target.value)} placeholder={c.settings.projectPlaceholder} /></label><button className="button primary" disabled={!workspacePath.trim() || !project.trim() || busy} onClick={add}><Plus size={17} />{c.common.add}</button></div></div></section>
     <section className="surface settings-card"><div className={`settings-icon ${data.integration?.available ? "" : "warning"}`}><Bot /></div><div><h2>{c.settings.integrationTitle}</h2><p>{data.integration?.available ? c.settings.integrationReady : c.settings.integrationMissing}</p><div className="integration-status"><Status value={data.integration?.available ? "validated" : "conflict"} c={c} /><div><code>{data.integration?.version ?? data.integration?.detail ?? "codex.exe"}</code><code className="integration-path">{data.integration?.command ?? "codex.exe"}</code></div></div><small>{c.settings.integrationHint}</small></div></section>
     <section className="surface settings-card"><div className="settings-icon"><Waypoints /></div><div><h2>{c.settings.vaultTitle}</h2><p className="settings-path">{data.vaultRoot}</p><small>{c.settings.vaultHint}</small></div></section>
+    <section className="surface settings-card danger-zone"><div className="settings-icon warning"><Trash2 /></div><div><h2>{c.settings.resetTitle}</h2><p>{c.settings.resetDescription}</p><button className="button danger" disabled={busy} onClick={clearHistory}><Trash2 size={17}/>{c.settings.resetAction}</button></div></section>
   </div></>;
 }
 
@@ -186,10 +198,18 @@ function SetupWizard({ complete }: { complete: () => Promise<void> }) {
   </div><small className="setup-footnote">{c.setup.localFirst}</small></div>;
 }
 
-function SyncReview({ reports, busy, close, confirm, c }: { reports: Array<Record<string, any>>; busy: boolean; close: () => void; confirm: () => void; c: Copy }) {
-  const plans = reports.flatMap(report => report.obsidian_write_plan ?? []);
-  const threadIds = reports.map(report => report.source?.thread_id).filter(Boolean);
-  return <div className="modal-backdrop"><section className="sync-modal"><div className="modal-heading"><div><h2>{c.sync.title}</h2><p>{threadIds.length} {c.sync.tasks} · {plans.length} {c.sync.operations}</p></div><button className="icon-button" onClick={close} aria-label={c.common.close}><X size={19}/></button></div><div className="sync-summary"><div><span>{c.sync.sources}</span><b>{plans.filter(item => item.type === "source").length}</b></div><div><span>{c.sync.summaries}</span><b>{plans.filter(item => item.type === "learning_summary").length}</b></div><div><span>{c.sync.candidates}</span><b>{plans.filter(item => item.type === "knowledge").length}</b></div><div><span>{c.sync.conflicts}</span><b>{plans.filter(item => item.knowledge_operation === "conflict").length}</b></div></div><div className="sync-files">{plans.length ? plans.slice(0, 20).map((item, index) => <div key={`${item.target}-${index}`}><span>{typeLabel(c, item.type)}</span><code>{item.target}</code><em>{item.operation}</em></div>) : <Empty>{c.sync.empty}</Empty>}</div><div className="modal-actions"><button className="button" onClick={close}>{c.common.cancel}</button><button className="button primary" disabled={busy || !plans.length} onClick={confirm}>{busy && <LoaderCircle className="spin" size={17}/>} {c.sync.confirm}</button></div></section></div>;
+function MonitorPanel({ reports, events, state, lastScanAt, busy, writeOne, writeAll, ignoreOne, c, locale }: {
+  reports: Array<Record<string, any>>; events: MonitorEvent[]; state: ListenerState; lastScanAt: string | null; busy: boolean;
+  writeOne: (report: Record<string, any>) => void; writeAll: () => void; ignoreOne: (report: Record<string, any>) => void; c: Copy; locale: AppLocale;
+}) {
+  const stateLabel = state === "scanning" ? c.monitor.scanning : state === "error" ? c.monitor.error : state === "paused" ? c.system.paused : state === "manual" ? c.system.manual : c.monitor.waiting;
+  return <aside className="inspector monitor-panel"><div className="monitor-head"><div className={`monitor-signal ${state}`}><Activity size={20}/></div><div><h2>{c.monitor.title}</h2><p>{c.monitor.subtitle}</p></div></div><div className="monitor-live"><span><i className={state}/>{stateLabel}</span>{lastScanAt && <time>{formatDate(lastScanAt, locale)}</time>}</div><section className="monitor-queue"><div className="monitor-section-title"><div><label>{c.monitor.queue}</label><b>{reports.length}</b></div>{reports.length > 1 && <button className="text-button" disabled={busy} onClick={writeAll}>{c.monitor.writeAll}</button>}</div>{reports.length ? reports.map(report => {
+    const plans = report.obsidian_write_plan ?? [];
+    const key = `${report.source?.thread_id}:${report.source?.turn_id}`;
+    const project = report.project_resolution?.project_name ?? c.common.none;
+    const needsRouting = Boolean(report.project_resolution?.needs_confirmation);
+    return <article className={`pending-turn${needsRouting ? " needs-routing" : ""}`} key={key}><div className="pending-turn-head"><div><strong>{report.source?.thread_name || project}</strong><span>{c.monitor.project}：{project}</span></div>{needsRouting ? <span className="route-warning">{c.monitor.routeNeeded}</span> : <Status value="review" c={c}/>}</div><code className="pending-workspace">{report.source?.workspace_path || c.common.none}</code>{needsRouting && <p className="route-hint">{c.monitor.routeHint}</p>}<p>{report.human_summary?.reason ?? c.monitor.sourceOnly}</p><details><summary>{c.monitor.details} · {plans.length}</summary><div className="pending-plan">{plans.slice(0, 20).map((item: any, index: number) => <div key={`${item.target}-${index}`}><span>{typeLabel(c, item.type)}</span><code>{item.target}</code></div>)}</div></details><div className="pending-actions"><button className="button" disabled={busy} onClick={() => ignoreOne(report)}>{c.monitor.ignore}</button><button className="button primary" disabled={busy} onClick={() => writeOne(report)}>{busy && <LoaderCircle className="spin" size={16}/>} {needsRouting ? c.monitor.writeUnsorted : c.monitor.writeOne}</button></div></article>;
+  }) : <div className="monitor-empty"><Check size={24}/><span>{c.sync.empty}</span></div>}</section><section className="monitor-log"><label>{c.nav.activity}</label>{events.length ? events.slice().reverse().map(event => <div className={`monitor-event ${event.tone}`} key={event.id}><i/><div><strong>{event.title}</strong><span>{event.detail}</span></div><time>{formatDate(event.at, locale)}</time></div>) : <div className="monitor-empty compact"><span>{c.monitor.started}</span></div>}</section></aside>;
 }
 
 function ThreadPicker({ threads, loading, close, preview, c }: { threads: ThreadRecord[]; loading: boolean; close: () => void; preview: (ids: string[]) => void; c: Copy }) {
@@ -210,7 +230,7 @@ export default function App() {
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactRecord | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
-  const [syncReports, setSyncReports] = useState<Array<Record<string, any>> | null>(null);
+  const [syncReports, setSyncReports] = useState<Array<Record<string, any>>>([]);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [threadPicker, setThreadPicker] = useState(false);
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
@@ -219,6 +239,29 @@ export default function App() {
   const [notice, setNotice] = useState<{ tone: "success" | "info"; title: string; message: string } | null>(null);
   const [listenerState, setListenerState] = useState<ListenerState>("paused");
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
+  const [monitorEvents, setMonitorEvents] = useState<MonitorEvent[]>([]);
+  const pendingRef = useRef<Array<Record<string, any>>>([]);
+  const scanBusyRef = useRef(false);
+  const operationBusyRef = useRef(false);
+  const listenerStartedRef = useRef(false);
+  function addMonitorEvent(tone: MonitorEvent["tone"], title: string, detail: string) {
+    setMonitorEvents(current => [...current, { id: `${Date.now()}-${Math.random()}`, at: new Date().toISOString(), tone, title, detail }].slice(-30));
+  }
+  function replaceQueue(next: Array<Record<string, any>>) {
+    pendingRef.current = next;
+    setSyncReports(next);
+  }
+  function mergeQueue(incoming: Array<Record<string, any>>) {
+    const current = new Map(pendingRef.current.map(report => [`${report.source?.thread_id}:${report.source?.turn_id}`, report]));
+    let added = 0;
+    for (const report of actionableReports(incoming)) {
+      const key = `${report.source?.thread_id}:${report.source?.turn_id}`;
+      if (!current.has(key)) added += 1;
+      current.set(key, report);
+    }
+    replaceQueue([...current.values()]);
+    return added;
+  }
   async function reload() { setError(null); try { const result = await loadOverview(); setData(result); setSelectedProject(current => current ? result.projects.find(item => item.path === current.path) ?? null : result.projects[0] ?? null); setSelectedArtifact(current => current ? result.artifacts.find(item => item.path === current.path) ?? null : null); setNeedsSetup(false); } catch (reason) { const text = String(reason); if (/config|配置|Vault|找不到/i.test(text)) setNeedsSetup(true); else setError(text); } }
   useEffect(() => { reload(); }, []);
   const locale = data?.locale ?? "zh-CN";
@@ -229,33 +272,67 @@ export default function App() {
     if (data.mode === "manual") { setListenerState("manual"); return; }
     if (!data.autoWatch || !data.integration?.available) { setListenerState("paused"); return; }
     let disposed = false;
-    const timer = window.setTimeout(async () => {
-      if (syncing || syncReports || threadPicker) return;
+    async function scan() {
+      if (scanBusyRef.current || operationBusyRef.current) return;
+      scanBusyRef.current = true;
       setListenerState("scanning");
       try {
         const result = await previewSync();
         if (disposed) return;
-        const reports = actionableReports(result.reports);
         setLastScanAt(new Date().toISOString());
-        if (reports.length) {
-          setSyncReports(reports);
-          setNotice({ tone: "info", title: c.sync.title, message: c.sync.autoFound });
+        const added = mergeQueue(result.reports);
+        if (added > 0) {
+          addMonitorEvent("info", c.monitor.detected, `${added} ${c.sync.tasks}`);
         }
         setListenerState("listening");
-      } catch {
-        if (!disposed) setListenerState("error");
+      } catch (reason) {
+        if (!disposed) {
+          setListenerState("error");
+          addMonitorEvent("warning", c.monitor.error, String(reason));
+        }
+      } finally {
+        scanBusyRef.current = false;
       }
-    }, Math.max(5000, data.pollIntervalMs ?? 10000));
+    }
+    if (!listenerStartedRef.current) {
+      listenerStartedRef.current = true;
+      addMonitorEvent("success", c.monitor.started, c.monitor.subtitle);
+    }
     setListenerState("listening");
-    return () => { disposed = true; window.clearTimeout(timer); };
-  }, [data?.mode, data?.autoWatch, data?.pollIntervalMs, data?.integration?.available, syncing, Boolean(syncReports), threadPicker, c]);
-  async function runPreview(ids: string[] = []) { setSyncing(true); setSyncError(null); setNotice(null); try { const result = await previewSync(ids); const reports = actionableReports(result.reports); setThreadPicker(false); setLastScanAt(new Date().toISOString()); if (reports.length) setSyncReports(reports); else { setSyncReports(null); setNotice({ tone: "info", title: c.common.syncNow, message: c.sync.noNew }); } } catch (reason) { setSyncError(String(reason)); } finally { setSyncing(false); } }
+    void scan();
+    const timer = window.setInterval(scan, Math.max(5000, data.pollIntervalMs ?? 10000));
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [data?.mode, data?.autoWatch, data?.pollIntervalMs, data?.integration?.available, c]);
+  async function runPreview(ids: string[] = []) { setSyncing(true); setSyncError(null); setNotice(null); try { const result = await previewSync(ids); const added = mergeQueue(result.reports); setThreadPicker(false); setLastScanAt(new Date().toISOString()); if (added > 0) { addMonitorEvent("info", c.monitor.detected, `${added} ${c.sync.tasks}`); setNotice({ tone: "info", title: c.monitor.detected, message: c.sync.autoFound }); } else { setNotice({ tone: "info", title: c.common.syncNow, message: c.sync.noNew }); } } catch (reason) { setSyncError(String(reason)); } finally { setSyncing(false); } }
   async function sync() {
     if (data?.mode !== "manual") return runPreview();
     setThreadPicker(true); setThreadsLoading(true); setSyncError(null);
     try { setThreads(await listThreads()); } catch (reason) { setThreadPicker(false); setSyncError(String(reason)); } finally { setThreadsLoading(false); }
   }
-  async function confirmSync() { if (!syncReports) return; setSyncing(true); setSyncError(null); try { const ids = [...new Set(syncReports.map(report => report.source?.thread_id).filter(Boolean))] as string[]; const turnIds = [...new Set(syncReports.map(report => report.source?.turn_id).filter(Boolean))] as string[]; const result = await writeSync(ids, turnIds); const changed = result.reports.flatMap(report => (report as any).write_results ?? []).filter((item: any) => ["created", "updated"].includes(item.outcome)).length; setSyncReports(null); setNotice({ tone: "success", title: c.sync.success, message: `${c.sync.successDetail} ${changed} ${c.sync.changedFiles}` }); await reload(); } catch (reason) { setSyncError(String(reason)); } finally { setSyncing(false); } }
+  async function processQueue(reports: Array<Record<string, any>>, action: "write" | "ignore") {
+    if (!reports.length) return;
+    setSyncing(true); operationBusyRef.current = true; setSyncError(null);
+    const keys = new Set(reports.map(report => `${report.source?.thread_id}:${report.source?.turn_id}`));
+    const ids = [...new Set(reports.map(report => report.source?.thread_id).filter(Boolean))] as string[];
+    const turnIds = [...new Set(reports.map(report => report.source?.turn_id).filter(Boolean))] as string[];
+    try {
+      if (action === "ignore") {
+        await skipSync(ids, turnIds);
+        replaceQueue(pendingRef.current.filter(report => !keys.has(`${report.source?.thread_id}:${report.source?.turn_id}`)));
+        addMonitorEvent("info", c.monitor.ignored, `${reports.length} ${c.sync.tasks}`);
+      } else {
+        const result = await writeSync(ids, turnIds);
+        const changed = result.reports.flatMap(report => (report as any).write_results ?? []).filter((item: any) => ["created", "updated"].includes(item.outcome)).length;
+        replaceQueue(pendingRef.current.filter(report => !keys.has(`${report.source?.thread_id}:${report.source?.turn_id}`)));
+        addMonitorEvent("success", c.monitor.wrote, `${changed} ${c.sync.changedFiles}`);
+        setNotice({ tone: "success", title: c.sync.success, message: `${c.sync.successDetail} ${changed} ${c.sync.changedFiles}` });
+        await reload();
+      }
+    } catch (reason) { setSyncError(String(reason)); addMonitorEvent("warning", c.monitor.error, String(reason)); }
+    finally { operationBusyRef.current = false; setSyncing(false); }
+  }
+  async function confirmSync(reports = pendingRef.current) { await processQueue(reports, "write"); }
+  async function ignoreSync(report: Record<string, any>) { await processQueue([report], "ignore"); }
   async function reviewArtifact(artifact: ArtifactRecord, action: ReviewAction) {
     if (action !== "validate" && !window.confirm(action === "archive" ? c.knowledge.archive : c.knowledge.markSuperseded)) return;
     setReviewing(true); setSyncError(null);
@@ -268,7 +345,8 @@ export default function App() {
   if (!data) return <div className="loading"><LoaderCircle className="spin" /><span>{c.loading}</span></div>;
   const openSettings = () => setView("settings");
   const listenerLabel = listenerState === "scanning" ? c.system.scanning : listenerState === "listening" ? c.system.listening : listenerState === "manual" ? c.system.manual : listenerState === "error" ? c.system.attention : c.system.paused;
-  return <><div className="shell"><aside className="sidebar"><div className="brand"><div className="brand-mark"><Waypoints size={21} /></div><div><strong>OCA-Duplex</strong><span>{c.brand}</span></div></div><nav>{nav.map(([id, Icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={20} /><span>{c.nav[id]}</span>{id === "knowledge" && (data.artifactsByStatus.candidate ?? 0) > 0 && <em>{data.artifactsByStatus.candidate}</em>}</button>)}</nav><div className="system-card"><div><ShieldCheck size={19} /><span>{systemLabel}</span></div><strong><i className={listenerState === "error" ? "error" : listenerState === "paused" || listenerState === "manual" ? "paused" : ""}/>{listenerLabel}</strong><small>{data.workspaceMappings.length} {c.system.authorized}</small>{lastScanAt && <small>{c.system.lastScan}：{formatDate(lastScanAt, locale)}</small>}<small className={data.integration?.available ? "integration-ok" : "integration-warning"}>{data.integration?.available ? c.system.ready : c.system.attention}</small></div></aside><main className="content">
+  const scopeLabel = data.mode === "all" ? c.system.scopeAll : data.mode === "manual" ? c.system.scopeManual : `${data.workspaceMappings.length} ${c.system.authorized}`;
+  return <><div className="shell"><aside className="sidebar"><div className="brand"><div className="brand-mark"><Waypoints size={21} /></div><div><strong>OCA-Duplex</strong><span>{c.brand}</span></div></div><nav>{nav.map(([id, Icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={20} /><span>{c.nav[id]}</span>{id === "knowledge" && (data.artifactsByStatus.candidate ?? 0) > 0 && <em>{data.artifactsByStatus.candidate}</em>}</button>)}</nav><div className="system-card"><div><ShieldCheck size={19} /><span>{systemLabel}</span></div><strong><i className={listenerState === "error" ? "error" : listenerState === "paused" || listenerState === "manual" ? "paused" : ""}/>{listenerLabel}</strong><small>{scopeLabel}</small>{lastScanAt && <small>{c.system.lastScan}：{formatDate(lastScanAt, locale)}</small>}<small className={data.integration?.available ? "integration-ok" : "integration-warning"}>{data.integration?.available ? c.system.ready : c.system.attention}</small></div></aside><main className="content">
     {view === "overview" && <Overview data={data} c={c} selectProject={project => { setSelectedProject(project); setSelectedArtifact(null); }} sync={sync} syncing={syncing} refresh={reload} openSettings={openSettings} openProjects={() => setView("projects")} />}
     {view === "projects" && <Projects data={data} c={c} selectProject={project => { setSelectedProject(project); setSelectedArtifact(null); }} add={openSettings} />}
     {view === "conversations" && <ArtifactPage data={data} c={c} type="conversation" title={c.artifacts.conversationsTitle} subtitle={c.artifacts.conversationsSubtitle} selectArtifact={artifact => { setSelectedArtifact(artifact); setSelectedProject(null); }} />}
@@ -276,9 +354,8 @@ export default function App() {
     {view === "knowledge" && <Knowledge data={data} c={c} selectArtifact={artifact => { setSelectedArtifact(artifact); setSelectedProject(null); }} />}
     {view === "activity" && <ActivityPage data={data} c={c} />}
     {view === "settings" && <SettingsPage data={data} c={c} reload={reload} />}
-  </main><Inspector project={selectedProject} artifact={selectedArtifact} data={data} c={c} reviewing={reviewing} review={reviewArtifact} reviewProject={() => setView("knowledge")} /></div>
+  </main>{view === "overview" ? <MonitorPanel reports={syncReports} events={monitorEvents} state={listenerState} lastScanAt={lastScanAt} busy={syncing} writeOne={report => confirmSync([report])} writeAll={() => confirmSync()} ignoreOne={ignoreSync} c={c} locale={locale}/> : <Inspector project={selectedProject} artifact={selectedArtifact} data={data} c={c} reviewing={reviewing} review={reviewArtifact} reviewProject={() => setView("knowledge")} />}</div>
   {threadPicker && <ThreadPicker threads={threads} loading={threadsLoading} close={() => setThreadPicker(false)} preview={runPreview} c={c} />}
-  {syncReports && <SyncReview reports={syncReports} busy={syncing} close={() => setSyncReports(null)} confirm={confirmSync} c={c} />}
   {notice && <Notice {...notice} close={() => setNotice(null)} />}
   {syncError && <div className="toast-error"><AlertTriangle size={19}/><div><b>{c.sync.failed}</b><span>{syncError}</span></div><button onClick={() => setSyncError(null)}><X size={17}/></button></div>}</>;
 }

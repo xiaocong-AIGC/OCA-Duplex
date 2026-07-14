@@ -29,6 +29,17 @@ function sharedTags(left, right) {
   return left.filter((tag) => rightSet.has(tag));
 }
 
+async function readPrefix(filePath, maximumBytes = 32768) {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(maximumBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maximumBytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 function frontmatterValue(content, key) {
   const match = String(content).match(new RegExp(`^${key}:\\s*(.+?)\\s*$`, "m"));
   if (!match) return null;
@@ -42,7 +53,11 @@ export async function buildNoteIndex(config) {
   for (const folder of folders) files.push(...await walkMarkdown(path.resolve(vaultRoot, folder)));
   const notes = [];
   for (const filePath of [...new Set(files)]) {
-    const content = await fs.readFile(filePath, "utf8");
+    const content = await readPrefix(filePath);
+    const artifactId = frontmatterValue(content, "artifact_id");
+    const ocaVersion = frontmatterValue(content, "oca_version");
+    const ocaManaged = frontmatterValue(content, "oca_managed");
+    if (ocaManaged !== "true" && !(artifactId && ocaVersion)) continue;
     notes.push({
       path: path.relative(vaultRoot, filePath).replace(/\\/g, "/"),
       title: path.basename(filePath, path.extname(filePath)),
@@ -50,7 +65,7 @@ export async function buildNoteIndex(config) {
       type: frontmatterValue(content, "type"),
       status: frontmatterValue(content, "status"),
       source_thread_id: frontmatterValue(content, "source_thread_id"),
-      oca_managed: frontmatterValue(content, "oca_managed") === "true",
+      oca_managed: ocaManaged === "true",
       excerpt: content.replace(/^---[\s\S]*?---\s*/m, "").slice(0, 12000)
     });
   }

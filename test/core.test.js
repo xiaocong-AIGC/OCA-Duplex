@@ -44,11 +44,20 @@ function snapshotFixture() {
   );
 }
 
-test("capture keeps visible summaries but not hidden reasoning content", () => {
+test("capture keeps user-visible messages and excludes reasoning by default", () => {
   const snapshot = snapshotFixture();
-  assert.equal(snapshot.conversation_nodes.length, 3);
-  assert.match(snapshot.conversation_nodes[1].text, /先提取任务/);
+  assert.equal(snapshot.conversation_nodes.length, 2);
+  assert.doesNotMatch(JSON.stringify(snapshot), /先提取任务/);
   assert.doesNotMatch(JSON.stringify(snapshot), /not captured/);
+});
+
+test("reasoning summaries require explicit opt-in", () => {
+  const snapshot = normalizeTurn(
+    { id: "thread-reasoning", cwd: "D:\\Project" },
+    { id: "turn-reasoning", status: "completed", items: [{ id: "r1", type: "reasoning", summary: ["可见摘要"] }] },
+    { includeReasoningSummaries: true }
+  );
+  assert.equal(snapshot.conversation_nodes[0].kind, "reasoning_summary");
 });
 
 test("secret redaction removes common credentials", () => {

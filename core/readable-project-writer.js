@@ -484,7 +484,7 @@ export function buildWritePlan({ snapshot, title, units, linkSets, projectResolu
   const derivedEntries = derivedUnits.map((unit) => ({ unit, routing: derivedTarget(unit, projectResolution, config) }));
   const plan = [];
 
-  if (source.confident) {
+  if (source.confident && config.write.generateProjectHome === true) {
     const homeTarget = path.posix.join(projectRoot, `${sanitizeFilename(projectResolution.project_name, "项目首页", 24)}.md`);
     const publicDerived = derivedEntries.map(({ unit, routing }) => ({ type: unit.type, scope: routing.scope, target: routing.target }));
     const managedBlock = projectSummaryBlock(projectRoot, source.target, publicDerived, snapshot, config);
@@ -539,15 +539,17 @@ export function buildWritePlan({ snapshot, title, units, linkSets, projectResolu
     }
   }
 
-  if (source.confident) {
+  if (source.confident && config.write.generateMaintenanceFiles === true) {
     const date = (snapshot.turn.completed_at ?? new Date().toISOString()).slice(0, 10);
     const logTarget = path.posix.join(projectRoot, projectSubdirs(config).logs, `${date}-${snapshot.turn.id.slice(0, 8)}.md`);
     const loggedTargets = plan.map((entry) => entry.target);
     plan.push({ operation: "create_if_absent", type: "log", target: logTarget, project_root: projectRoot, content: renderLog(snapshot, projectResolution, loggedTargets, config) });
   }
 
-  plan.push({ operation: "upsert_managed_file", type: "project_index", target: projectIndexPath(config), content: renderProjectIndex(snapshot, projectResolution, config) });
-  plan.push({ operation: "upsert_managed_file", type: "dashboard", target: dashboardPath(config), content: renderDashboard(snapshot, projectResolution, config) });
+  if (config.write.generateMaintenanceFiles === true) {
+    plan.push({ operation: "upsert_managed_file", type: "project_index", target: projectIndexPath(config), content: renderProjectIndex(snapshot, projectResolution, config) });
+    plan.push({ operation: "upsert_managed_file", type: "dashboard", target: dashboardPath(config), content: renderDashboard(snapshot, projectResolution, config) });
+  }
   return plan;
 }
 

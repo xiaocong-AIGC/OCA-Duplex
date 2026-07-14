@@ -41,12 +41,23 @@ export async function initializeSystem(params: { vaultRoot: string; locale: stri
 
 export async function previewSync(threadIds: string[] = []) {
   if (!("__TAURI_INTERNALS__" in window)) return { mode: "dry-run", reports: [] };
-  return requestDesktop<{ mode: string; reports: Array<Record<string, unknown>> }>("sync.preview", { limit: 5, threadIds });
+  return requestDesktop<{ mode: string; reports: Array<Record<string, unknown>> }>("sync.preview", { limit: 25, threadIds });
 }
 
 export async function writeSync(threadIds: string[], turnIds: string[]) {
   if (!("__TAURI_INTERNALS__" in window)) return { mode: "write", reports: [] };
   return requestDesktop<{ mode: string; reports: Array<Record<string, unknown>> }>("sync.write", { limit: Math.max(5, turnIds.length), threadIds, turnIds });
+}
+
+export async function skipSync(threadIds: string[], turnIds: string[]) {
+  if (!("__TAURI_INTERNALS__" in window)) return { skipped: turnIds.length };
+  return requestDesktop<{ skipped: number }>("sync.skip", { threadIds, turnIds });
+}
+
+export async function resetHistory() {
+  if (!("__TAURI_INTERNALS__" in window)) return { deletedCount: 0, baselineTurns: 0 };
+  const result = await requestDesktop<unknown>("system.reset_history");
+  return camelize(result) as { deletedCount: number; baselineTurns: number };
 }
 
 export async function setCaptureMode(mode: "safe" | "manual" | "all") {

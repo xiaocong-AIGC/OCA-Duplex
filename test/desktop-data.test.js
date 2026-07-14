@@ -37,6 +37,7 @@ test("desktop data API reports projects, artifacts, mappings, and audit activity
     "", "# 事务与审计", ""
   ].join("\n");
   await executeWritePlan([{ operation: "create_if_absent", type: "knowledge", target, project_root: "项目/测试", source_thread_id: "thread-api", source_turn_id: "turn-api", content }], config);
+  await fs.writeFile(path.join(config.vaultRoot, "项目", "测试", "知识库", "用户手写笔记.md"), "# 用户手写笔记\n", "utf8");
 
   const [projects, artifacts, activity, overview] = await Promise.all([
     listDesktopProjects(config),
@@ -46,6 +47,8 @@ test("desktop data API reports projects, artifacts, mappings, and audit activity
   ]);
   assert.equal(projects[0].name, "测试");
   assert.equal(artifacts[0].type, "knowledge");
+  assert.equal(artifacts.length, 1);
+  assert.equal(projects[0].counts.knowledge, 1);
   assert.equal(activity[0].target, target);
   assert.equal(overview.workspace_mappings[0].project, "测试");
   const response = await handleDesktopRequest(config, { method: "artifacts.list", params: { project: "测试" } });

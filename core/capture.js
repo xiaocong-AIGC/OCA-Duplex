@@ -63,6 +63,7 @@ export function normalizeItem(item, context, options = {}) {
     return { ...base, role: "assistant", kind: "message", phase: item.phase ?? null, text: redactSecrets(item.text ?? "") };
   }
   if (item.type === "reasoning") {
+    if (!options.includeReasoningSummaries) return null;
     const summary = Array.isArray(item.summary) ? item.summary.join("\n") : "";
     if (!summary.trim()) return null;
     return { ...base, role: "assistant", kind: "reasoning_summary", phase: "commentary", text: redactSecrets(summary) };

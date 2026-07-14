@@ -96,6 +96,13 @@ export class ContextBuffer {
     return this.records.find((record) => record.turn_id === turnId) ?? null;
   }
 
+  reset() {
+    this.processedTurns.clear();
+    this.processedThreads.clear();
+    this.records = [];
+    this.loaded = true;
+  }
+
   async save() {
     const relativePath = this.config.state.path;
     const filePath = resolveWithinVault(this.config.vaultRoot, relativePath);

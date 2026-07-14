@@ -6,6 +6,8 @@ import { handleDesktopRequest } from "../runtime/desktop-data.js";
 import { runCli } from "../runtime/cli-runner.js";
 import { AppServerClient } from "../runtime/app-server-client.js";
 import { ConversationStream } from "../runtime/conversation-stream.js";
+import { DuplexTracker } from "../runtime/duplex-tracker.js";
+import { clearOcaGeneratedData } from "../runtime/data-reset.js";
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -43,6 +45,40 @@ async function execute(request, explicitPath) {
     });
     const reports = text.trim() ? text.trim().split(/\n(?=\{)/).map((part) => JSON.parse(part)) : [];
     return { mode: request.method === "sync.write" ? "write" : "dry-run", reports };
+  }
+  if (["sync.skip", "system.reset_history"].includes(request.method)) {
+    const config = await loadConfig(configPath, { allowEmptySafeMode: true });
+    const client = new AppServerClient(config.appServer);
+    try {
+      await client.start();
+      const stream = new ConversationStream(client, config);
+      const tracker = new DuplexTracker(config, { write: false, commit: false });
+      await tracker.initialize();
+      const requestedThreads = [...new Set((request.params?.threadIds ?? []).filter(Boolean))];
+      const requestedTurns = new Set((request.params?.turnIds ?? []).filter(Boolean));
+      if (request.method === "sync.skip") {
+        const snapshots = (await stream.fetchSnapshots(requestedThreads)).filter((snapshot) => requestedTurns.has(snapshot.turn.id));
+        const results = [];
+        for (const snapshot of snapshots) results.push(await tracker.skip(snapshot, { userChoice: "desktop-ignore" }));
+        return { skipped: results.length, results };
+      }
+
+      const threads = await stream.listThreads({ unfiltered: true, limit: config.capture.newestThreads ?? 50 });
+      const snapshots = await stream.fetchSnapshots(threads.map((thread) => thread.id));
+      const cleared = await clearOcaGeneratedData(config);
+      tracker.context.reset();
+      for (const snapshot of snapshots) tracker.context.record({
+        threadId: snapshot.thread.id,
+        turnId: snapshot.turn.id,
+        mode: "skipped",
+        files: [],
+        userChoice: "history-reset"
+      });
+      await tracker.context.save();
+      return { ...cleared, baseline_turns: snapshots.length };
+    } finally {
+      await client.stop();
+    }
   }
   const config = await loadConfig(configPath, { allowEmptySafeMode: true });
   return handleDesktopRequest(config, request);

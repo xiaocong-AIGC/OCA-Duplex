@@ -180,8 +180,11 @@ export class DuplexTracker {
       execution,
       source: {
         thread_id: snapshot.thread.id,
+        thread_name: snapshot.thread.name ?? snapshot.thread.preview ?? "",
+        workspace_path: snapshot.thread.cwd ?? "",
         turn_id: snapshot.turn.id,
-        turn_status: snapshot.turn.status
+        turn_status: snapshot.turn.status,
+        completed_at: snapshot.turn.completed_at ?? null
       },
       write_results: writeResults.map(({ content, append_content, turn_marker, ...result }) => result),
       human_summary: humanSummary

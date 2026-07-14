@@ -122,9 +122,9 @@ test("project-first write plan contains Source plus prioritized derived content"
   assert.equal(plan.filter((entry) => entry.type === "source").length, 1);
   assert.ok(plan.some((entry) => entry.type === "learning_summary"));
   assert.ok(plan.filter((entry) => ["learning_summary", "output", "project", "knowledge", "prompt"].includes(entry.type)).length <= 5);
-  assert.equal(plan.filter((entry) => entry.type === "project_home").length, 1);
-  assert.equal(plan.filter((entry) => entry.type === "project_index").length, 1);
-  assert.equal(plan.filter((entry) => entry.type === "dashboard").length, 1);
+  assert.equal(plan.filter((entry) => entry.type === "project_home").length, 0);
+  assert.equal(plan.filter((entry) => entry.type === "project_index").length, 0);
+  assert.equal(plan.filter((entry) => entry.type === "dashboard").length, 0);
   assert.match(plan.find((entry) => entry.type === "source").target, /^10_项目\/OCA-Duplex\/01_原始记录\/\d{4}-\d{2}-\d{2}-.+-thread-s\.md$/);
   const summary = buildHumanSummary(snapshot, parsed, plan);
   assert.equal(summary.source_notes_to_create, 1);
@@ -139,6 +139,19 @@ test("Source plan is retained even when no derived unit passes quality gates", (
   assert.equal(plan.filter((entry) => entry.type === "source").length, 1);
   assert.equal(plan.filter((entry) => ["knowledge", "prompt", "project"].includes(entry.type)).length, 0);
   assert.match(plan.find((entry) => entry.type === "source").target, /^00_收件箱\/未归类Codex捕获\//);
+  assert.equal(plan.filter((entry) => entry.type === "project_index").length, 0);
+  assert.equal(plan.filter((entry) => entry.type === "dashboard").length, 0);
+});
+
+test("legacy Markdown maintenance files are available only by explicit opt-in", () => {
+  const snapshot = makeSnapshot({ userText: PROJECT_REQUEST, answerText: HIGH_QUALITY_ANSWER });
+  const parsed = parseConversation(snapshot);
+  const config = makeConfig("D:\\ObsidianVault");
+  config.write.generateProjectHome = true;
+  config.write.generateMaintenanceFiles = true;
+  const units = classifyUnits(parsed.knowledge_units, config);
+  const plan = buildWritePlan({ snapshot, title: parsed.title, units, linkSets: [], projectResolution: { project_name: "OCA-Duplex", confidence: 0.96, source: "thread_title" }, config });
+  assert.equal(plan.filter((entry) => entry.type === "project_home").length, 1);
   assert.equal(plan.filter((entry) => entry.type === "project_index").length, 1);
   assert.equal(plan.filter((entry) => entry.type === "dashboard").length, 1);
 });
