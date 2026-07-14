@@ -11,7 +11,7 @@ export function configPathForVault(vaultRoot) {
 export function defaultConfig(vaultRoot, locale = "zh-CN") {
   const root = path.resolve(vaultRoot);
   const config = {
-    version: "1.0.0-beta.3",
+    version: "1.0.0-beta.5",
     vaultRoot: root,
     appServer: {
       command: "codex",
@@ -24,6 +24,7 @@ export function defaultConfig(vaultRoot, locale = "zh-CN") {
     capture: {
       mode: "safe",
       workspaces: [],
+      threadAssignments: [],
       autoWatch: true,
       pollIntervalMs: 10000,
       heartbeatMs: 60000,
@@ -101,6 +102,13 @@ export function normalizeWorkspaceEntry(entry) {
   return { path: workspacePath, project };
 }
 
+export function normalizeThreadAssignment(entry) {
+  const threadId = String(entry?.threadId ?? entry?.thread_id ?? "").trim();
+  const project = String(entry?.project ?? "").trim();
+  if (!threadId || !project) throw new Error("每个对话归属都必须包含 threadId 和 project。");
+  return { threadId, project };
+}
+
 export function validateConfig(config) {
   if (!config || typeof config !== "object") throw new Error("配置必须是 JSON 对象。");
   if (!path.isAbsolute(config.vaultRoot ?? "")) throw new Error("vaultRoot 必须是绝对路径。");
@@ -111,6 +119,7 @@ export function validateConfig(config) {
   config.capture ??= {};
   config.capture.mode = mode;
   config.capture.workspaces = (config.capture.workspaces ?? []).map(normalizeWorkspaceEntry);
+  config.capture.threadAssignments = (config.capture.threadAssignments ?? []).map(normalizeThreadAssignment);
   if (mode === "safe" && config.capture.workspaces.length === 0) {
     throw new Error("安全模式至少需要一个“工作目录 → 项目名”映射。请运行 oca-duplex workspace add。");
   }

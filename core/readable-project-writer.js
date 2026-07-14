@@ -30,8 +30,21 @@ function yamlList(values) {
 function metadataLines({ type, status = "draft", snapshot, projectResolution, projectName, category, tags = [], config, managed = false }) {
   const capturedAt = snapshot?.turn?.completed_at ?? new Date().toISOString();
   const lifecycle = threadLifecycle(snapshot);
+  const chinese = String(config.locale ?? config.layoutProfile ?? "zh-CN").toLowerCase().startsWith("zh");
+  const typeLabels = chinese
+    ? { conversation: "对话底稿", source: "对话底稿", learning_summary: "复盘总结", knowledge: "待审知识", prompt: "提示词", output: "输出成果", project: "项目资产", log: "入库流水" }
+    : { conversation: "Source record", source: "Source record", learning_summary: "Operating review", knowledge: "Knowledge", prompt: "Prompt", output: "Output", project: "Project asset", log: "Intake log" };
+  const statusLabels = chinese
+    ? { draft: "草稿", active: "生效中", captured: "已收录", candidate: "待审核", conflict: "有冲突", validated: "已采用", completed: "已完成" }
+    : { draft: "Draft", active: "Active", captured: "Captured", candidate: "Needs review", conflict: "Conflict", validated: "Adopted", completed: "Completed" };
+  const publicFields = chinese
+    ? [`内容类型: ${yamlString(typeLabels[type] ?? type)}`, `所属项目: ${projectName ? yamlString(projectName) : "待分配"}`, `运营状态: ${yamlString(statusLabels[status] ?? status)}`, `最后更新: ${yamlString(capturedAt)}`]
+    : [`content_type: ${yamlString(typeLabels[type] ?? type)}`, `project_name: ${projectName ? yamlString(projectName) : "Needs assignment"}`, `operating_status: ${yamlString(statusLabels[status] ?? status)}`, `updated_at: ${yamlString(capturedAt)}`];
   return [
     "---",
+    ...publicFields,
+    `tags: ${yamlList(tags)}`,
+    "cssclasses: [oca-duplex-note]",
     `schema_version: ${CONTENT_SCHEMA_VERSION}`,
     `type: ${type}`,
     `artifact_id: ${yamlString(artifactIdentity(type, snapshot))}`,
@@ -47,7 +60,6 @@ function metadataLines({ type, status = "draft", snapshot, projectResolution, pr
     `captured_at: ${yamlString(capturedAt)}`,
     `oca_version: ${yamlString(config.ocaVersion ?? config.version ?? "0.4.0")}`,
     `oca_managed: ${managed}`,
-    `tags: ${yamlList(tags)}`,
     "---"
   ];
 }
@@ -58,10 +70,96 @@ function cleanInline(value, maximum = 120) {
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/https?:\/\/\S+/g, "")
     .replace(/[*_`>#]/g, "")
-    .replace(/^[-+\d.)\s]+/, "")
+    .replace(/^\s*(?:[-+*]\s+|\d+[.)、]\s+)/, "")
     .replace(/\s+/g, " ")
     .trim();
   return Array.from(text).slice(0, maximum).join("");
+}
+
+function frontmatterField(content, key) {
+  const match = String(content ?? "").match(new RegExp(`^${key}:\\s*(.+?)\\s*$`, "m"));
+  return match ? match[1].replace(/^['"]|['"]$/g, "").trim() : null;
+}
+
+function markdownSections(text) {
+  const sections = [];
+  let current = { title: "正文", lines: [] };
+  for (const rawLine of String(text ?? "").replace(/\r/g, "").split("\n")) {
+    const heading = rawLine.trim().match(/^#{1,6}\s+(.+)$/);
+    if (heading) {
+      if (current.lines.some((line) => line.trim())) sections.push({ title: current.title, body: current.lines.join("\n") });
+      current = { title: cleanInline(heading[1], 48), lines: [] };
+    } else current.lines.push(rawLine);
+  }
+  if (current.lines.some((line) => line.trim())) sections.push({ title: current.title, body: current.lines.join("\n") });
+  return sections;
+}
+
+function uniqueItems(items, maximum = 8) {
+  const result = [];
+  for (const rawItem of items) {
+    const item = cleanInline(rawItem, 180);
+    if (item.length < 8) continue;
+    const key = item.toLocaleLowerCase().replace(/[\s，。；：、,.!?！？:;“”"']/g, "");
+    const similar = result.findIndex((entry) => entry.key.includes(key) || key.includes(entry.key));
+    if (similar >= 0) {
+      if (item.length < result[similar].item.length) result[similar] = { item, key };
+      continue;
+    }
+    result.push({ item, key });
+    if (result.length >= maximum) break;
+  }
+  return result.map((entry) => entry.item);
+}
+
+function itemsFromSections(sections, pattern, maximum = 8) {
+  return uniqueItems(
+    sections.filter((section) => pattern.test(section.title)).flatMap((section) => contentBullets(section.body, { max: maximum, minLength: 8 })),
+    maximum
+  );
+}
+
+function operationalStructure(text) {
+  const sections = markdownSections(text);
+  const all = uniqueItems(contentBullets(text, { max: 30, minLength: 8 }), 30);
+  const conclusionSections = sections.filter((section) => /结论|摘要|概览|问题结论|一句话/i.test(section.title));
+  const conclusion = uniqueItems(conclusionSections.flatMap((section) => contentBullets(section.body, { max: 3, minLength: 8 })), 1)[0]
+    ?? all.find((item) => /核心|结论|本轮|主要|关键/.test(item))
+    ?? all[0]
+    ?? cleanInline(text, 180);
+  const completed = itemsFromSections(sections, /已完成|完成内容|修复|处理结果|交付结果/i, 8);
+  const risks = uniqueItems([
+    ...itemsFromSections(sections, /限制|风险|技术债|待确认|未完成|其他发现|注意/i, 6),
+    ...all.filter((item) => /尚未|仍然|仍有|风险|限制|不能|需要确认|待确认/.test(item))
+  ], 6);
+  const next = itemsFromSections(sections, /下一步|后续|计划|优先级|建议|待办/i, 8);
+  const validation = itemsFromSections(sections, /验证|测试|检查结果|验收/i, 8);
+  const excluded = new Set([conclusion, ...completed, ...risks, ...next, ...validation]);
+  const keyPoints = all.filter((item) => !excluded.has(item) && !/^https?:/i.test(item)).slice(0, 8);
+  return { conclusion, completed, risks, next, validation, keyPoints };
+}
+
+function callout(kind, title, lines) {
+  if (!lines?.length) return [];
+  return [`> [!${kind}] ${title}`, ...lines.map((line) => `> ${line.startsWith("-") ? line : `- ${line}`}`), ""];
+}
+
+function tableCell(value) {
+  return cleanInline(value, 160).replace(/\|/g, "\\|");
+}
+
+function splitLabelValue(item) {
+  const match = String(item).match(/^(.{2,32}?)[：:]\s*(.+)$/);
+  return match ? [tableCell(match[1]), tableCell(match[2])] : [tableCell(item), "已记录"];
+}
+
+function resolvedDerivedTitle(kind, unit, projectResolution) {
+  const generated = generateTitle({ kind, text: `${unit.title}\n${unit.text}`, projectName: projectResolution.project_name, fallback: unit.title });
+  const poor = /^(?:你|我|我们|请|帮我|my request|files mentioned|本轮|当前|问题结论)/i.test(generated)
+    || /(?:整理|方案|实践规则)$/.test(generated) && Array.from(generated).length > 22;
+  if (!poor) return { title: generated, fallback: false };
+  const suffix = kind === "output" ? "交付方案" : kind === "knowledge" ? "运营规则" : kind === "prompt" ? "提示词" : "内容复盘";
+  return { title: `${projectResolution.project_name || "项目"} · ${suffix}`, fallback: true };
 }
 
 function meaningfulSentences(text) {
@@ -179,9 +277,9 @@ function knowledgeStructure(unit, projectResolution) {
 
 export function renderKnowledgeBody(unit, projectResolution, sourceTarget) {
   const structure = knowledgeStructure(unit, projectResolution);
-  const title = generateTitle({ kind: "knowledge", text: `${unit.title}\n${unit.text}`, projectName: projectResolution.project_name, fallback: unit.title });
+  const { title } = resolvedDerivedTitle("knowledge", unit, projectResolution);
   const research = isResearchContent(`${unit.title}\n${unit.text}`);
-  const lines = [`# ${title}`, "", "## 一句话结论", "", structure.conclusion, ""];
+  const lines = [`# ${title}`, "", ...callout("summary", "一句话结论", [structure.conclusion])];
   if (research) {
     const rows = extractMarkdownRows(unit.text);
     if (rows.length > 0) lines.push("## 来源中的结构化数据", "", ...rows.map((row) => `| ${row.join(" | ")} |`), "");
@@ -189,13 +287,13 @@ export function renderKnowledgeBody(unit, projectResolution, sourceTarget) {
     if (structure.points.length > 0) lines.push("## 核心要点", "", ...structure.points.map((point) => `- ${cleanInline(point, 140)}`), "");
   }
   if (structure.methods.length > 0) lines.push("## 对话中明确的方法", "", ...structure.methods.map((method, index) => `${index + 1}. ${cleanInline(method, 140)}`), "");
-  if (structure.cautions.length > 0) lines.push("## 对话中明确的限制", "", ...structure.cautions.map((item) => `- ${cleanInline(item, 140)}`), "");
+  if (structure.cautions.length > 0) lines.push(...callout("warning", "适用限制", structure.cautions.map((item) => cleanInline(item, 140))));
   lines.push("", "## 来源", "", `- [[${sourceTarget.replace(/\.md$/i, "")}]]`);
   return `${lines.join("\n").trim()}\n`;
 }
 
 export function renderDigestBody(unit, projectResolution, sourceTarget) {
-  const title = generateTitle({ kind: "digest", text: `${unit.title}\n${unit.text}`, projectName: projectResolution.project_name, fallback: unit.title });
+  const { title } = resolvedDerivedTitle("digest", unit, projectResolution);
   const bullets = contentBullets(unit.text, { max: 8, minLength: 12 });
   const conclusion = bullets[0] ?? cleanInline(unit.text, 180);
   return [
@@ -216,44 +314,28 @@ export function renderDigestBody(unit, projectResolution, sourceTarget) {
   ].join("\n");
 }
 
-function learningTurnBlock(unit, snapshot, sourceTarget) {
-  const bullets = contentBullets(unit.text, { max: 8, minLength: 12 });
-  const marker = `<!-- oca-learning-turn:${snapshot.turn.id} -->`;
-  const timestamp = snapshot.turn.completed_at ?? snapshot.turn.started_at ?? "时间未知";
-  return [
-    marker,
-    `### ${timestamp.replace("T", " ").replace(/\.\d{3}Z$/, "Z")}`,
-    "",
-    ...(bullets.length ? bullets.map((item) => `- ${cleanInline(item, 160)}`) : ["- 本轮没有提取出足够明确的新结论。"]),
-    "",
-    `来源：[[${sourceTarget.replace(/\.md$/i, "")}]]`,
-    ""
-  ].join("\n");
-}
-
 function renderLearningSummaryBody(unit, projectResolution, sourceTarget, snapshot) {
-  const bullets = contentBullets(unit.text, { max: 8, minLength: 12 });
-  const current = bullets.length ? bullets.map((item) => `- ${cleanInline(item, 160)}`) : ["- 暂无足够明确的新结论。"];
-  return [
-    `# ${unit.title}`,
-    "",
-    "<!-- oca:learning-current:start -->",
-    "## 当前学习结论",
-    "",
-    ...current,
-    "<!-- oca:learning-current:end -->",
-    "",
-    "## 学习历程",
-    "",
-    "<!-- oca:learning-history:start -->",
-    learningTurnBlock(unit, snapshot, sourceTarget).trim(),
-    "<!-- oca:learning-history:end -->",
-    ""
-  ].join("\n");
+  const structure = operationalStructure(unit.text);
+  const project = projectResolution.project_name || "项目";
+  const lines = [`# ${project} · 阶段复盘`, "", ...callout("summary", "本轮结论", [structure.conclusion])];
+  if (structure.completed.length) lines.push(...callout("success", "本轮已完成", structure.completed.map((item) => `- [x] ${item}`)));
+  if (structure.keyPoints.length) lines.push("## 关键结论", "", ...structure.keyPoints.map((item) => `- ${item}`), "");
+  if (structure.risks.length) lines.push(...callout("warning", "待确认与风险", structure.risks));
+  if (structure.next.length) {
+    lines.push("## 下一步行动", "", "| 序号 | 行动项 | 状态 |", "| ---: | --- | --- |", ...structure.next.map((item, index) => `| ${index + 1} | ${tableCell(item)} | 待执行 |`), "");
+  }
+  if (structure.validation.length) {
+    lines.push("## 验证结果", "", "| 检查项 | 结果 |", "| --- | --- |", ...structure.validation.map((item) => {
+      const [label, value] = splitLabelValue(item);
+      return `| ${label} | ${value} |`;
+    }), "");
+  }
+  lines.push("## 来源对话", "", `- [[${sourceTarget.replace(/\.md$/i, "")}]]`, "", "> [!info] 更新时间", `> ${snapshot.turn.completed_at ?? snapshot.turn.started_at ?? "时间未知"}`, "");
+  return lines.join("\n");
 }
 
 export function renderOutputBody(unit, projectResolution, sourceTarget) {
-  const title = generateTitle({ kind: "output", text: `${unit.title}\n${unit.text}`, projectName: projectResolution.project_name, fallback: unit.title });
+  const { title } = resolvedDerivedTitle("output", unit, projectResolution);
   return [
     `# ${title}`,
     "",
@@ -268,7 +350,7 @@ export function renderOutputBody(unit, projectResolution, sourceTarget) {
   ].join("\n");
 }
 function renderPromptBody(unit, projectResolution, sourceTarget) {
-  const title = generateTitle({ kind: "prompt", text: `${unit.title}\n${unit.text}`, projectName: projectResolution.project_name, fallback: unit.title });
+  const { title } = resolvedDerivedTitle("prompt", unit, projectResolution);
   return [
     `# ${title}`,
     "",
@@ -285,11 +367,12 @@ function renderPromptBody(unit, projectResolution, sourceTarget) {
 
 function derivedTarget(unit, projectResolution, config) {
   const confident = projectResolution.confidence >= (config.projectRouting?.minimumConfidence ?? 0.75);
-  const title = generateTitle({ kind: unit.type, text: `${unit.title}\n${unit.text}`, projectName: projectResolution.project_name, fallback: unit.title });
+  const resolved = resolvedDerivedTitle(unit.type, unit, projectResolution);
+  const title = resolved.title;
   const profile = layoutProfile(config.locale ?? config.layoutProfile ?? "zh-CN");
   let fileName = unit.type === "learning_summary"
-    ? `${profile.names.learningSummary}-${sanitizeFilename(unit.source_thread_id?.slice(0, 8), "thread", 12)}.md`
-    : `${sanitizeFilename(title, unit.unit_id, 24)}.md`;
+    ? `${sanitizeFilename(projectResolution.project_name || profile.names.learningSummary, profile.names.learningSummary, 18)}-阶段复盘-${sanitizeFilename(unit.source_thread_id?.slice(0, 8), "thread", 12)}.md`
+    : `${sanitizeFilename(title, unit.unit_id, 28)}${resolved.fallback && unit.type === "output" ? `-${sanitizeFilename(unit.source_turn_id?.slice(0, 8), "turn", 10)}` : ""}.md`;
   if (unit.type === "knowledge" && ["conflict", "supersede"].includes(unit.knowledge_lifecycle?.operation)) {
     const suffix = unit.knowledge_lifecycle.operation === "conflict" ? (profile.id === "en-US" ? "Conflict" : "冲突") : (profile.id === "en-US" ? "Replacement" : "替代候选");
     fileName = `${sanitizeFilename(title, unit.unit_id, 20)}-${suffix}-${sanitizeFilename(unit.source_turn_id?.slice(0, 8), "turn", 10)}.md`;
@@ -454,8 +537,8 @@ function renderDashboard(snapshot, projectResolution, config) {
 
 function renderLog(snapshot, projectResolution, targets, config) {
   return [
-    ...metadataLines({ type: "log", status: "completed", snapshot, projectResolution, projectName: projectResolution.project_name, category: "同步记录", tags: ["codex"], config }),
-    "", `# 同步记录 ${snapshot.turn.id.slice(0, 8)}`, "", ...targets.map((target) => `- [[${target.replace(/\.md$/i, "")}]]`), ""
+    ...metadataLines({ type: "log", status: "completed", snapshot, projectResolution, projectName: projectResolution.project_name, category: "入库流水", tags: ["codex"], config }),
+    "", `# 入库流水 ${snapshot.turn.id.slice(0, 8)}`, "", ...targets.map((target) => `- [[${target.replace(/\.md$/i, "")}]]`), ""
   ].join("\n");
 }
 
@@ -521,9 +604,6 @@ export function buildWritePlan({ snapshot, title, units, linkSets, projectResolu
       knowledge_state: safeLifecycle?.state,
       related_knowledge: safeLifecycle?.existing_target,
       knowledge_evidence: mayUpdateExisting ? renderKnowledgeEvidence(unit, snapshot, source.target) : undefined,
-      learning_marker: unit.type === "learning_summary" ? `<!-- oca-learning-turn:${snapshot.turn.id} -->` : undefined,
-      learning_current: unit.type === "learning_summary" ? contentBullets(unit.text, { max: 8, minLength: 12 }).map((item) => `- ${cleanInline(item, 160)}`).join("\n") : undefined,
-      learning_history: unit.type === "learning_summary" ? learningTurnBlock(unit, snapshot, source.target) : undefined,
       content: renderDerived(unit, linksByUnit.get(unit.unit_id) ?? [], source.target, projectResolution, routing, snapshot, config)
     });
     if (safeLifecycle?.operation === "supersede" && safeLifecycle.existing_target && safeLifecycle.existing_managed) {
@@ -599,22 +679,12 @@ async function upsertLearningSummary(filePath, entry) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   try {
     const existing = await fs.readFile(filePath, "utf8");
-    if (existing.includes(entry.learning_marker)) return "skipped_existing";
-    const currentBlock = [
-      "<!-- oca:learning-current:start -->",
-      "## 当前学习结论",
-      "",
-      entry.learning_current || "- 暂无足够明确的新结论。",
-      "<!-- oca:learning-current:end -->"
-    ].join("\n");
-    let next = existing.replace(/<!-- oca:learning-current:start -->[\s\S]*?<!-- oca:learning-current:end -->/, currentBlock);
-    if (next.includes("<!-- oca:learning-history:end -->")) {
-      next = next.replace("<!-- oca:learning-history:end -->", `${entry.learning_history.trim()}\n<!-- oca:learning-history:end -->`);
-    } else {
-      next = `${next.trim()}\n\n## 学习历程\n\n${entry.learning_history.trim()}\n`;
+    if (frontmatterField(existing, "source_turn_id") === String(entry.source_turn_id)) return "skipped_existing";
+    let next = entry.content;
+    for (const key of ["assigned_at", "assigned_by"]) {
+      const preserved = frontmatterField(existing, key);
+      if (preserved && !new RegExp(`^${key}:`, "m").test(next)) next = next.replace(/^---\s*$/m, `---\n${key}: ${yamlString(preserved)}`);
     }
-    next = next.replace(/^source_turn_id:\s*.*$/m, `source_turn_id: ${yamlString(entry.source_turn_id)}`);
-    next = next.replace(/^captured_at:\s*.*$/m, `captured_at: ${yamlString(new Date().toISOString())}`);
     await fs.writeFile(filePath, `${next.trim()}\n`, "utf8");
     return "updated";
   } catch (error) {

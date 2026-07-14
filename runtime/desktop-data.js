@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { projectSubdirs, projectsRoot } from "../vault/path-map.js";
+import { projectSubdirs, projectsRoot, unsortedCapturesPath } from "../vault/path-map.js";
 import { configPathForVault, defaultConfig, normalizeWorkspaceEntry, saveConfig } from "./config.js";
 import { normalizeLocale } from "../vault/layout-profiles.js";
 import { applyLayoutMigrationPlan, buildLayoutMigrationPlan } from "../vault/layout-migration.js";
@@ -9,6 +9,9 @@ import { resolveAppServerCommand } from "./app-server-client.js";
 import { commandText, runLocalCommand } from "./process-info.js";
 import { appendAuditEvents, beginWriteTransaction, completeWriteTransaction, rollbackWriteTransaction } from "../core/write-transaction.js";
 import { resolveWithinVault } from "../core/writer.js";
+import { sanitizeFilename } from "../core/quality.js";
+import { projectSlug } from "./project-resolver.js";
+import { installObsidianReadingStyle } from "../vault/obsidian-reading-style.js";
 
 function integrationStatus(config) {
   const command = resolveAppServerCommand(config.appServer.command ?? "codex");
@@ -161,11 +164,16 @@ export async function listDesktopProjects(config) {
 }
 
 export async function listDesktopArtifacts(config, { project = null, type = null, limit = 200 } = {}) {
-  const base = project
-    ? path.join(config.vaultRoot, projectsRoot(config), project)
-    : path.join(config.vaultRoot, projectsRoot(config));
+  const bases = project
+    ? [path.join(config.vaultRoot, projectsRoot(config), project)]
+    : [
+        path.join(config.vaultRoot, projectsRoot(config)),
+        path.join(config.vaultRoot, unsortedCapturesPath(config))
+      ];
   const artifacts = [];
-  for (const filePath of await walkMarkdown(base)) {
+  const files = new Set();
+  for (const base of bases) for (const filePath of await walkMarkdown(base)) files.add(filePath);
+  for (const filePath of files) {
     const content = await readPrefix(filePath);
     const metadata = frontmatter(content);
     if (!isOcaArtifactMetadata(metadata)) continue;
@@ -187,6 +195,96 @@ export async function listDesktopArtifacts(config, { project = null, type = null
   return artifacts.sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, limit);
 }
 
+function projectFolderForType(type, config) {
+  const folders = projectSubdirs(config);
+  if (["conversation", "source"].includes(type)) return folders.sources;
+  if (type === "learning_summary") return folders.summaries ?? folders.knowledge;
+  if (type === "knowledge") return folders.knowledge;
+  if (type === "prompt") return folders.prompts;
+  if (type === "output") return folders.outputs;
+  if (type === "decision") return folders.decisions;
+  return folders.inbox;
+}
+
+async function assignArtifactToProject(config, params) {
+  const source = String(params.path ?? "").replace(/\\/g, "/");
+  const projectInput = String(params.project ?? "").trim();
+  if (!source || !/[\p{L}\p{N}]/u.test(projectInput)) throw new Error("请选择待分配内容并填写有效的项目名称。");
+  const project = sanitizeFilename(projectInput, "未命名项目", 40);
+  const unsortedRoot = `${unsortedCapturesPath(config)}/`;
+  if (!source.startsWith(unsortedRoot)) throw new Error("只能分配当前处于待分配区的内容。");
+
+  const sourceAbsolute = resolveWithinVault(config.vaultRoot, source);
+  const content = await fs.readFile(sourceAbsolute, "utf8");
+  const metadata = frontmatter(content);
+  if (!isOcaArtifactMetadata(metadata) || metadata.project) throw new Error("该内容已经归入项目或不属于 OCA-Duplex。");
+  const threadId = String(metadata.source_thread_id ?? "").trim();
+  if (!threadId) throw new Error("该内容缺少来源对话 ID，无法建立后续路由。");
+
+  const assignedAt = new Date().toISOString();
+  const related = [];
+  for (const filePath of await walkMarkdown(path.join(config.vaultRoot, unsortedCapturesPath(config)))) {
+    const itemContent = await fs.readFile(filePath, "utf8");
+    const itemMetadata = frontmatter(itemContent);
+    if (!isOcaArtifactMetadata(itemMetadata) || itemMetadata.project || itemMetadata.source_thread_id !== threadId) continue;
+    const itemSource = path.relative(config.vaultRoot, filePath).replace(/\\/g, "/");
+    const itemTarget = path.posix.join(projectsRoot(config), project, projectFolderForType(itemMetadata.type, config), path.posix.basename(itemSource));
+    const targetAbsolute = resolveWithinVault(config.vaultRoot, itemTarget);
+    try {
+      await fs.access(targetAbsolute);
+      throw new Error(`项目中已存在同名内容：${itemTarget}`);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    let updated = setFrontmatterValues(itemContent, {
+      project,
+      project_slug: projectSlug(project),
+      category: itemMetadata.type === "conversation" ? "项目对话" : "项目资产",
+      oca_managed: true,
+      assigned_at: assignedAt,
+      assigned_by: "desktop-user"
+    });
+    updated = updated
+      .replace(/^- 项目：未归类\s*$/m, `- 项目：${project}`)
+      .replace(/^- Project: Unclassified\s*$/mi, `- Project: ${project}`);
+    related.push({ source: itemSource, target: itemTarget, targetAbsolute, metadata: itemMetadata, updated });
+  }
+  if (!related.length) throw new Error("没有找到属于该对话的待分配内容。");
+  related.sort((left, right) => Number(right.source === source) - Number(left.source === source));
+
+  const transaction = await beginWriteTransaction(related.flatMap((item) => [{ target: item.source }, { target: item.target }]), config);
+  try {
+    for (const item of related) {
+      await fs.mkdir(path.dirname(item.targetAbsolute), { recursive: true });
+      const temporary = `${item.targetAbsolute}.${randomUUID()}.tmp`;
+      await fs.writeFile(temporary, item.updated, "utf8");
+      await fs.rename(temporary, item.targetAbsolute);
+      await fs.rm(resolveWithinVault(config.vaultRoot, item.source));
+    }
+
+    const assignments = (config.capture.threadAssignments ?? []).filter((entry) => entry.threadId !== threadId);
+    config.capture.threadAssignments = [...assignments, { threadId, project }];
+    await saveConfig(configPathForVault(config.vaultRoot), config);
+
+    const results = related.map((item) => ({
+      operation: "assign_project",
+      type: item.metadata.type ?? "conversation",
+      target: item.target,
+      outcome: "updated",
+      source_thread_id: threadId,
+      source_turn_id: item.metadata.source_turn_id ?? null,
+      project_root: `${projectsRoot(config)}/${project}`,
+      knowledge_operation: null
+    }));
+    await appendAuditEvents(config, transaction.id, results);
+    await completeWriteTransaction(transaction);
+    return { ...results[0], source, project, assigned_at: assignedAt, moved_count: results.length, targets: results.map((item) => item.target) };
+  } catch (error) {
+    await rollbackWriteTransaction(transaction, config, error);
+    throw error;
+  }
+}
+
 export async function listDesktopActivity(config, { limit = 100 } = {}) {
   const auditPath = path.join(config.vaultRoot, ".oca-duplex", "audit.jsonl");
   try {
@@ -202,7 +300,7 @@ export async function desktopOverview(config) {
   const [projects, artifacts, activity] = await Promise.all([
     listDesktopProjects(config),
     listDesktopArtifacts(config, { limit: 10000 }),
-    listDesktopActivity(config, { limit: 20 })
+    listDesktopActivity(config, { limit: 1000 })
   ]);
   const byType = {};
   const byStatus = {};
@@ -226,6 +324,7 @@ export async function desktopOverview(config) {
     vault_root: config.vaultRoot,
     projects_count: projects.length,
     artifacts_count: artifacts.length,
+    unclassified_count: artifacts.filter((artifact) => !artifact.project).length,
     artifacts_by_type: byType,
     artifacts_by_status: byStatus,
     workspace_mappings: config.capture.workspaces,
@@ -255,6 +354,7 @@ export async function initializeDesktopSystem({ vaultRoot, locale = "zh-CN", mod
   });
   const directories = new Set([...Object.values(config.userFacingPaths), path.posix.dirname(config.dashboard.path), config.daily.path]);
   for (const relative of directories) await fs.mkdir(path.join(root, relative), { recursive: true });
+  await installObsidianReadingStyle(root);
   await saveConfig(configPath, config);
   return { configured: true, config_path: configPath, overview: await desktopOverview(config) };
 }
@@ -306,6 +406,7 @@ export async function handleDesktopRequest(config, request) {
     return applyLayoutMigrationPlan(configPath, plan);
   }
   if (request.method === "knowledge.review") return reviewKnowledge(config, params);
+  if (request.method === "artifact.assign_project") return assignArtifactToProject(config, params);
   if (request.method === "system.overview") return desktopOverview(config);
   if (request.method === "projects.list") return listDesktopProjects(config);
   if (request.method === "artifacts.list") return listDesktopArtifacts(config, params);

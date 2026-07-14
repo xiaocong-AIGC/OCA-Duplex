@@ -91,6 +91,11 @@ export async function reviewKnowledge(path: string, action: "validate" | "archiv
   return requestDesktop("knowledge.review", { path, action, expectedUpdatedAt });
 }
 
+export async function assignArtifactToProject(path: string, project: string) {
+  if (!("__TAURI_INTERNALS__" in window)) return { path, project };
+  return requestDesktop("artifact.assign_project", { path, project });
+}
+
 export async function switchLayoutLanguage(locale: "zh-CN" | "en-US") {
   if (!("__TAURI_INTERNALS__" in window)) return { applied: true, locale };
   const preview = await requestDesktop<any>("settings.set_language", { locale, apply: false });

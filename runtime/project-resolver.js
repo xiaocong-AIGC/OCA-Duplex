@@ -108,6 +108,18 @@ export class ProjectResolver {
     const fullText = Object.values(evidence).join("\n");
     const candidates = [];
 
+    const assignedThread = (this.config.capture?.threadAssignments ?? [])
+      .find((entry) => entry.threadId === snapshot.thread.id);
+    if (assignedThread) {
+      return candidate(
+        assignedThread.project,
+        1,
+        "thread_assignment",
+        `运营人员已将整条对话归入项目：${assignedThread.project}`,
+        "项目知识"
+      );
+    }
+
     const mappedWorkspace = workspaceForCwd(this.config.capture?.workspaces ?? [], evidence.workspace_path);
     if (mappedWorkspace) {
       return candidate(

@@ -86,6 +86,27 @@ test("workspace mapping has highest routing priority and prevents topic-based mi
   assert.equal(result.confidence, 1);
 });
 
+test("operator thread assignment persists project routing for future turns", async () => {
+  const layout = await tempLayout();
+  const config = {
+    vaultRoot: layout.vault,
+    userFacingPaths: { projects: "10_项目" },
+    projectAliases: { path: ".oca-duplex/project-aliases.json" },
+    capture: { workspaces: [], threadAssignments: [{ threadId: "thread-assigned", project: "运营项目" }] }
+  };
+  await fs.mkdir(path.join(layout.vault, ".oca-duplex"), { recursive: true });
+  await fs.writeFile(path.join(layout.vault, ".oca-duplex", "project-aliases.json"), JSON.stringify({ aliases: [] }));
+  const resolver = new ProjectResolver(config);
+  await resolver.initialize();
+  const result = await resolver.resolve({
+    thread: { id: "thread-assigned", cwd: "D:\\ObsidianVault", name: "泛化标题" },
+    conversation_nodes: [{ role: "user", kind: "message", text: "继续处理" }]
+  });
+  assert.equal(result.project_name, "运营项目");
+  assert.equal(result.source, "thread_assignment");
+  assert.equal(result.confidence, 1);
+});
+
 test("generic operational wording is not invented as a project name", async () => {
   const layout = await tempLayout();
   const config = {

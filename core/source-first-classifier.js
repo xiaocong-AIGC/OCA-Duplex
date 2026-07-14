@@ -15,7 +15,7 @@ const REASONS = {
   knowledge: "聚合为可复用的方法、流程、规则或架构总结",
   prompt: "聚合为可复用的 Prompt、Skill 或指令规则",
   digest: "整轮回答包含实质建议、方向、步骤或结论，沉淀为内容整理",
-  learning_summary: "同一任务的有效结论持续汇总到一份学习总结",
+  learning_summary: "同一任务的有效结论持续汇总到一份复盘总结",
   output: "整轮回答包含可直接使用的方案、清单、表格或执行建议，沉淀为项目产出"
 };
 

@@ -1,4 +1,4 @@
-export type ViewId = "overview" | "projects" | "conversations" | "summaries" | "knowledge" | "activity" | "settings";
+export type ViewId = "overview" | "projects" | "unclassified" | "conversations" | "summaries" | "knowledge" | "activity" | "settings";
 
 export interface ProjectRecord {
   name: string;
@@ -42,6 +42,7 @@ export interface OverviewData {
   vaultRoot: string;
   projectsCount: number;
   artifactsCount: number;
+  unclassifiedCount: number;
   artifactsByType: Record<string, number>;
   artifactsByStatus: Record<string, number>;
   workspaceMappings: Array<{ path: string; project: string }>;

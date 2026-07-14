@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { executeWritePlan } from "../core/writer.js";
 import { desktopOverview, handleDesktopRequest, listDesktopActivity, listDesktopArtifacts, listDesktopProjects } from "../runtime/desktop-data.js";
-import { defaultConfig } from "../runtime/config.js";
+import { configPathForVault, defaultConfig, loadConfig } from "../runtime/config.js";
 import { ContextBuffer } from "../runtime/context-buffer.js";
+import { projectSubdirs, unsortedCapturesPath } from "../vault/path-map.js";
 
 async function tempConfig() {
   const vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oca-desktop-data-"));
@@ -53,6 +54,47 @@ test("desktop data API reports projects, artifacts, mappings, and audit activity
   assert.equal(overview.workspace_mappings[0].project, "测试");
   const response = await handleDesktopRequest(config, { method: "artifacts.list", params: { project: "测试" } });
   assert.equal(response[0].source_thread_id, "thread-api");
+  await fs.rm(config.vaultRoot, { recursive: true, force: true });
+});
+
+test("unclassified content is counted and assignment moves the whole conversation into a project", async () => {
+  const config = await tempConfig();
+  const source = `${unsortedCapturesPath(config)}/待分配对话.md`;
+  const absolute = path.join(config.vaultRoot, source);
+  await fs.mkdir(path.dirname(absolute), { recursive: true });
+  await fs.writeFile(absolute, [
+    "---", "schema_version: 2", "type: conversation", "artifact_id: conversation:thread-triage",
+    "status: captured", "project: null", "project_slug: null", "category: 需要人工归类",
+    "source_thread_id: thread-triage", "source_turn_id: turn-triage", "oca_version: 1.0.0-beta.3", "oca_managed: false", "---",
+    "", "# 待分配对话", "", "- 项目：未归类", ""
+  ].join("\n"), "utf8");
+  const relatedSource = `${unsortedCapturesPath(config)}/同对话知识.md`;
+  await fs.writeFile(path.join(config.vaultRoot, relatedSource), [
+    "---", "schema_version: 2", "type: knowledge", "artifact_id: knowledge:thread-triage",
+    "status: candidate", "project: null", "source_thread_id: thread-triage", "source_turn_id: turn-triage",
+    "oca_version: 1.0.0-beta.3", "oca_managed: false", "---", "", "# 同对话知识", ""
+  ].join("\n"), "utf8");
+
+  const before = await desktopOverview(config);
+  assert.equal(before.unclassified_count, 2);
+  assert.equal(before.artifacts_by_type.conversation, 1);
+
+  const result = await handleDesktopRequest(config, { method: "artifact.assign_project", params: { path: source, project: "运营项目" } });
+  const target = `项目/运营项目/${projectSubdirs(config).sources}/待分配对话.md`;
+  assert.equal(result.target, target);
+  assert.equal(result.moved_count, 2);
+  await assert.rejects(() => fs.access(absolute));
+  const moved = await fs.readFile(path.join(config.vaultRoot, target), "utf8");
+  assert.match(moved, /^project: 运营项目$/m);
+  assert.match(moved, /^oca_managed: true$/m);
+  assert.match(moved, /- 项目：运营项目/);
+  await fs.access(path.join(config.vaultRoot, `项目/运营项目/${projectSubdirs(config).knowledge}/同对话知识.md`));
+  const saved = await loadConfig(configPathForVault(config.vaultRoot));
+  assert.deepEqual(saved.capture.threadAssignments, [{ threadId: "thread-triage", project: "运营项目" }]);
+  const after = await desktopOverview(config);
+  assert.equal(after.unclassified_count, 0);
+  assert.equal(after.projects_count, 1);
+  assert.equal(after.activity[0].operation, "assign_project");
   await fs.rm(config.vaultRoot, { recursive: true, force: true });
 });
 

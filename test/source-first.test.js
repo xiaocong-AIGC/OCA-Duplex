@@ -172,10 +172,12 @@ test("knowledge and output renderers do not invent generic filler", () => {
   const resolution = { project_name: "测试项目", project_slug: "test" };
   const source = "项目/测试项目/原始对话/source.md";
   const knowledge = renderKnowledgeBody({ title: "迁移规则", text: "切换目录语言前必须检查目标路径是否已经存在。" }, resolution, source);
+  const numbered = renderKnowledgeBody({ title: "对话统计", text: "1 条 ChatGPT/Codex 对话只维护一份底稿。" }, resolution, source);
   const output = renderOutputBody({ title: "迁移清单", text: "- 生成迁移预览\n- 检查冲突\n- 用户确认后执行" }, resolution, source);
   assert.doesNotMatch(knowledge, /先明确输入|真实使用后记录反馈|适用场景/);
   assert.doesNotMatch(output, /视觉奇观|账号反馈|爆点/);
   assert.match(output, /生成迁移预览/);
+  assert.match(numbered, /1 条 ChatGPT\/Codex/);
 });
 
 test("thread Source appends a new Turn without creating another Source file", async () => {
@@ -214,7 +216,9 @@ test("one learning summary is updated across turns in the same thread", async ()
   assert.equal(secondResults.find((entry) => entry.type === "learning_summary").outcome, "updated");
   const content = await fs.readFile(path.join(vaultRoot, summaries[0].target), "utf8");
   assert.match(content, /schema_version: 2/);
-  assert.match(content, /oca-learning-turn:turn-learn-1/);
-  assert.match(content, /oca-learning-turn:turn-learn-2/);
+  assert.match(content, /OCA-Duplex · 阶段复盘/);
+  assert.match(content, /> \[!summary\] 本轮结论/);
+  assert.match(content, /目录语言必须保持一致/);
+  assert.doesNotMatch(content, /oca:learning|oca-learning-turn/);
   await fs.rm(vaultRoot, { recursive: true, force: true });
 });

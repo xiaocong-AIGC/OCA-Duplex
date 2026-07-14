@@ -4,6 +4,7 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { configPathForVault, defaultConfig, normalizeWorkspaceEntry, saveConfig } from "../runtime/config.js";
 import { layoutProfile, normalizeLocale } from "../vault/layout-profiles.js";
+import { installObsidianReadingStyle } from "../vault/obsidian-reading-style.js";
 import { hasFlag, option, options } from "./args.js";
 
 const MODE_HELP = {
@@ -96,6 +97,7 @@ export async function runInit(args) {
     for (const relative of initialDirectories) {
       await fs.mkdir(path.join(vaultRoot, relative), { recursive: true });
     }
+    await installObsidianReadingStyle(vaultRoot);
     await saveConfig(configPath, config);
 
     output.write(`\nOCA-Duplex 初始化完成。\n配置：${configPath}\n目录语言：${layoutProfile(config.locale).name}\n${MODE_HELP[config.capture.mode]}\n`);

@@ -133,7 +133,10 @@ export function parseConversation(snapshot) {
   const legacyAnswers = finalAnswers.length === 0
     ? nodes.filter((node) => node.role === "assistant" && node.kind === "message" && node.phase !== "commentary")
     : [];
-  const extractionNodes = [...finalAnswers, ...userMessages, ...legacyAnswers];
+  // Derived assets must come from an answer, not from the user's request. The
+  // request remains in the Source note and is used only as title context.
+  // Mixing it into the reusable-content pool turns questions into fake rules.
+  const extractionNodes = [...finalAnswers, ...legacyAnswers];
   const extracted = extractionNodes.map(extractFragments);
   const fragments = uniqueFragments(extracted.flatMap((result) => result.fragments));
   let skippedFragments = extracted.reduce((total, result) => total + result.skipped, 0);

@@ -8,7 +8,7 @@ export function buildHumanSummary(snapshot, parsed, writePlan) {
   const globalPrompt = count((entry) => entry.type === "prompt" && entry.scope === "global");
   const unsorted = count((entry) => entry.scope === "unsorted" || (entry.type === "source" && entry.target.includes("Unsorted Codex Captures")));
   const onlySource = count((entry) => ["digest", "output", "knowledge", "prompt"].includes(entry.type)) === 0;
-  const sourceOnlyReason = "本轮只写入原始对话，因为没有检测到可复用内容、可执行方案或明确结论。";
+  const sourceOnlyReason = "本轮只写入对话底稿，因为没有检测到可复用内容、可执行方案或明确结论。";
   const reason = onlySource
     ? sourceOnlyReason
     : `项目优先：计划写入 ${projectDigest} 篇内容整理、${projectOutput} 篇项目输出、${projectKnowledge} 篇项目知识、${projectPrompt} 篇项目提示词、${globalKnowledge} 篇全局知识、${globalPrompt} 篇全局提示词；未归类 ${unsorted} 项。`;

@@ -12,13 +12,13 @@ export const LAYOUT_PROFILES = Object.freeze({
     }),
     projectSubdirs: Object.freeze({
       inbox: "待整理",
-      sources: "原始对话",
-      summaries: "学习总结",
+      sources: "对话底稿",
+      summaries: "复盘总结",
       knowledge: "知识库",
       prompts: "提示词",
       outputs: "输出成果",
       decisions: "决策记录",
-      logs: "同步记录"
+      logs: "入库流水"
     }),
     names: Object.freeze({
       projectIndex: "项目索引.md",
@@ -26,7 +26,7 @@ export const LAYOUT_PROFILES = Object.freeze({
       unsorted: "未归类对话",
       dashboard: "系统看板.md",
       daily: "每日同步",
-      learningSummary: "学习总结"
+      learningSummary: "复盘总结"
     })
   }),
   "en-US": Object.freeze({
@@ -42,13 +42,13 @@ export const LAYOUT_PROFILES = Object.freeze({
     }),
     projectSubdirs: Object.freeze({
       inbox: "Pending",
-      sources: "Conversations",
-      summaries: "Learning Summaries",
+      sources: "Source Records",
+      summaries: "Operating Reviews",
       knowledge: "Knowledge",
       prompts: "Prompts",
       outputs: "Outputs",
       decisions: "Decisions",
-      logs: "Sync Logs"
+      logs: "Intake Logs"
     }),
     names: Object.freeze({
       projectIndex: "Project Index.md",
@@ -56,7 +56,7 @@ export const LAYOUT_PROFILES = Object.freeze({
       unsorted: "Unsorted Conversations",
       dashboard: "System Dashboard.md",
       daily: "Daily Sync",
-      learningSummary: "Learning Summary"
+      learningSummary: "Operating Review"
     })
   })
 });

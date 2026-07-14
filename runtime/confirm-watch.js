@@ -44,7 +44,7 @@ export function formatConfirmPrompt(report) {
     && (summary.project_prompt_to_create ?? 0) === 0
     && (summary.global_knowledge_to_create ?? 0) === 0
     && (summary.global_prompt_to_create ?? 0) === 0;
-  const sourceOnlyReason = noDerived ? `\n${summary.reason ?? "本轮只写入原始对话，因为没有检测到可复用内容、可执行方案或明确结论。"}` : "";
+  const sourceOnlyReason = noDerived ? `\n${summary.reason ?? "本轮只写入对话底稿，因为没有检测到可复用内容、可执行方案或明确结论。"}` : "";
   return [
     "OCA-Duplex 检测到新的 Codex 对话更新",
     "",

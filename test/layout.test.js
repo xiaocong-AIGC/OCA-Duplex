@@ -6,6 +6,7 @@ import path from "node:path";
 import { runInit } from "../commands/init.js";
 import { configPathForVault, defaultConfig, loadConfig, saveConfig } from "../runtime/config.js";
 import { applyLayoutMigrationPlan, buildLayoutMigrationPlan } from "../vault/layout-migration.js";
+import { installObsidianReadingStyle, OCA_SNIPPET_NAME } from "../vault/obsidian-reading-style.js";
 
 const temporaryRoots = new Set();
 
@@ -27,7 +28,7 @@ test("English installation creates a purely English public layout", async () => 
   const config = await loadConfig(configPathForVault(vault));
   assert.equal(config.locale, "en-US");
   assert.equal(config.userFacingPaths.projects, "Projects");
-  assert.equal(config.projectSubdirs.sources, "Conversations");
+  assert.equal(config.projectSubdirs.sources, "Source Records");
   await Promise.all(["Inbox", "Projects", "Global Knowledge", "Global Sources", "Global Prompts", "System"]
     .map((name) => fs.access(path.join(vault, name))));
 });
@@ -50,12 +51,27 @@ test("layout migration previews and atomically switches Chinese folders to Engli
   const plan = await buildLayoutMigrationPlan(config, "en-US");
   assert.equal(plan.ready, true);
   assert.ok(plan.operations.some((entry) => entry.to === "Projects"));
-  assert.ok(plan.operations.some((entry) => entry.to === "Projects/Demo/Conversations"));
+  assert.ok(plan.operations.some((entry) => entry.to === "Projects/Demo/Source Records"));
 
   const result = await applyLayoutMigrationPlan(configPath, plan);
   assert.equal(result.applied, true);
-  await fs.access(path.join(vault, "Projects", "Demo", "Conversations"));
+  await fs.access(path.join(vault, "Projects", "Demo", "Source Records"));
   await fs.access(path.join(vault, "Projects", "Project Index.md"));
   await fs.access(path.join(vault, "System", "OCA-Duplex", "System Dashboard.md"));
   assert.equal((await loadConfig(configPath)).locale, "en-US");
+});
+
+test("Obsidian reading style is merged without replacing existing appearance settings", async () => {
+  const vault = await tempVault();
+  const obsidian = path.join(vault, ".obsidian");
+  await fs.mkdir(obsidian, { recursive: true });
+  await fs.writeFile(path.join(obsidian, "appearance.json"), JSON.stringify({ theme: "obsidian", enabledCssSnippets: ["existing"] }), "utf8");
+  const result = await installObsidianReadingStyle(vault);
+  assert.equal(result.enabled, true);
+  const appearance = JSON.parse(await fs.readFile(path.join(obsidian, "appearance.json"), "utf8"));
+  assert.equal(appearance.theme, "obsidian");
+  assert.deepEqual(appearance.enabledCssSnippets, ["existing", OCA_SNIPPET_NAME]);
+  const css = await fs.readFile(path.join(obsidian, "snippets", `${OCA_SNIPPET_NAME}.css`), "utf8");
+  assert.match(css, /oca-duplex-note/);
+  assert.match(css, /data-callout="warning"/);
 });

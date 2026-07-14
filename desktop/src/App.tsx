@@ -6,7 +6,7 @@ import {
   Sparkles, Trash2, Waypoints, X
 } from "lucide-react";
 import {
-  addWorkspace, chooseDirectory, desktopAction, initializeSystem, listThreads, loadOverview,
+  addWorkspace, assignArtifactToProject, chooseDirectory, desktopAction, initializeSystem, listThreads, loadOverview,
   previewSync, removeWorkspace, resetHistory, reviewKnowledge, setAutoWatch, setCaptureMode, skipSync, switchLayoutLanguage, writeSync
 } from "./api";
 import { getCopy, type AppLocale, type Copy } from "./i18n";
@@ -35,8 +35,8 @@ function actionableReports(reports: Array<Record<string, any>>) {
 }
 
 const nav = [
-  ["overview", CircleGauge], ["projects", Folder], ["conversations", MessageSquareText],
-  ["summaries", BookOpen], ["knowledge", Library], ["activity", Activity], ["settings", Settings]
+  ["overview", CircleGauge], ["unclassified", ListChecks], ["projects", Folder],
+  ["conversations", MessageSquareText], ["summaries", BookOpen], ["knowledge", Library], ["activity", Activity], ["settings", Settings]
 ] as const;
 
 function typeLabel(c: Copy, value: string) {
@@ -48,8 +48,8 @@ function Status({ value, c }: { value: string; c: Copy }) {
   return <span className={`status status-${value}`}><i />{label}</span>;
 }
 
-function Metric({ icon: Icon, label, value, hint, tone = "green" }: { icon: typeof Folder; label: string; value: number; hint: string; tone?: string }) {
-  return <article className="metric-card"><div className={`metric-icon ${tone}`}><Icon size={23} /></div><div><span>{label}</span><strong>{value}</strong><small>{hint}</small></div></article>;
+function Metric({ icon: Icon, label, value, hint, tone = "green", onClick }: { icon: typeof Folder; label: string; value: number; hint: string; tone?: string; onClick: () => void }) {
+  return <button type="button" className="metric-card" onClick={onClick}><div className={`metric-icon ${tone}`}><Icon size={23} /></div><div><span>{label}</span><strong>{value}</strong><small>{hint}</small></div><ChevronRight className="metric-arrow" size={17}/></button>;
 }
 
 function Header({ title, subtitle, children }: { title: string; subtitle?: string; children?: React.ReactNode }) {
@@ -60,14 +60,36 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty"><Archive size={30} /><p>{children}</p></div>;
 }
 
-function Overview({ data, c, selectProject, sync, syncing, refresh, openSettings, openProjects }: {
+function usePagination<T>(items: T[], pageSize: number, resetKey = "") {
+  const [page, setPage] = useState(1);
+  const pages = Math.max(1, Math.ceil(items.length / pageSize));
+  useEffect(() => setPage(1), [resetKey, pageSize]);
+  useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
+  return { page, pages, setPage, visible: items.slice((page - 1) * pageSize, page * pageSize), total: items.length };
+}
+
+function Pagination({ page, pages, total, setPage, c }: { page: number; pages: number; total: number; setPage: (page: number) => void; c: Copy }) {
+  if (total === 0) return null;
+  return <div className="pagination"><span>{c.common.total} {total} · {page}/{pages} {c.common.page}</span><div><button disabled={page <= 1} onClick={() => setPage(page - 1)}>{c.common.previous}</button><button disabled={page >= pages} onClick={() => setPage(page + 1)}>{c.common.next}</button></div></div>;
+}
+
+function Overview({ data, c, selectProject, sync, syncing, refresh, openSettings, navigate }: {
   data: OverviewData; c: Copy; selectProject: (p: ProjectRecord) => void; sync: () => void; syncing: boolean;
-  refresh: () => Promise<void>; openSettings: () => void; openProjects: () => void;
+  refresh: () => Promise<void>; openSettings: () => void; navigate: (view: ViewId) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"projects" | "activity">("projects");
   const conflictCount = data.artifacts.filter(item => item.status === "conflict" || item.knowledgeOperation === "conflict").length || data.artifactsByStatus.conflict || 0;
   const userContentTypes = new Set(["source", "conversation", "learning_summary", "knowledge", "prompt", "output", "decision"]);
-  const recentWrites = data.activity.filter(item => ["created", "updated", "validated", "archived", "superseded"].includes(item.outcome) && userContentTypes.has(item.artifactType)).slice(0, 6);
+  const reviewCount = (data.artifactsByStatus.candidate ?? 0) + conflictCount;
+  const groupedWrites = new Map<string, { item: OverviewData["activity"][number]; count: number }>();
+  for (const item of data.activity.filter(item => ["created", "updated", "validated", "archived", "superseded"].includes(item.outcome) && userContentTypes.has(item.artifactType))) {
+    const current = groupedWrites.get(item.target);
+    groupedWrites.set(item.target, { item: current?.item ?? item, count: (current?.count ?? 0) + 1 });
+  }
+  const recentWrites = [...groupedWrites.values()];
+  const projectPage = usePagination(data.projects, 5);
+  const activityPage = usePagination(recentWrites, 6);
   return <>
     <Header title={c.overview.title} subtitle={c.overview.subtitle}>
       <button className="button" onClick={() => desktopAction("open_obsidian")}><FolderOpen size={18} />{c.common.openObsidian}</button>
@@ -82,26 +104,47 @@ function Overview({ data, c, selectProject, sync, syncing, refresh, openSettings
       </div>
     </Header>
     <section className="metrics">
-      <Metric icon={Folder} label={c.overview.projects} value={data.workspaceMappings.length} hint={`${data.projectsCount} ${c.overview.projectsHint}`} />
-      <Metric icon={MessageSquareText} label={c.overview.conversations} value={data.artifactsByType.conversation ?? data.artifactsByType.source ?? 0} hint={c.overview.conversationsHint} tone="blue" />
-      <Metric icon={ListChecks} label={c.overview.candidates} value={data.artifactsByStatus.candidate ?? 0} hint={c.overview.candidatesHint} tone="amber" />
-      <Metric icon={AlertTriangle} label={c.overview.conflicts} value={conflictCount} hint={conflictCount ? c.overview.conflictsNow : c.overview.noConflicts} tone="red" />
+      <Metric icon={Folder} label={c.overview.projects} value={data.projectsCount} hint={`${data.projectsCount} ${c.overview.projectsHint}`} onClick={() => navigate("projects")} />
+      <Metric icon={MessageSquareText} label={c.overview.conversations} value={(data.artifactsByType.conversation ?? 0) + (data.artifactsByType.source ?? 0)} hint={c.overview.conversationsHint} tone="blue" onClick={() => navigate("conversations")} />
+      <Metric icon={ListChecks} label={c.overview.candidates} value={data.unclassifiedCount ?? 0} hint={c.overview.candidatesHint} tone="amber" onClick={() => navigate("unclassified")} />
+      <Metric icon={AlertTriangle} label={c.overview.conflicts} value={reviewCount} hint={reviewCount ? `${reviewCount} ${c.overview.conflictsNow}` : c.overview.noConflicts} tone="red" onClick={() => navigate("knowledge")} />
     </section>
     <section className="overview-grid">
-      <div className="surface project-table"><div className="section-heading"><div><h2>{c.overview.recentProjects}</h2><p>{c.overview.recentProjectsHint}</p></div><button className="text-button" onClick={openProjects}>{c.overview.viewAll}<ChevronRight size={16} /></button></div>
-        <div className="table-scroll"><table><thead><tr><th>{c.overview.projectName}</th><th>{c.overview.sourcePath}</th><th>{c.overview.lastRead}</th><th>{c.overview.content}</th><th>{c.common.status}</th></tr></thead><tbody>
-          {data.projects.map(project => <tr key={project.path} onClick={() => selectProject(project)}><td><span className="project-name"><Folder size={18} />{project.name}</span></td><td className="path-cell">{project.sourcePath ?? c.projects.noSource}</td><td>{formatDate(project.updatedAt, data.locale)}</td><td>{project.totalArtifacts}</td><td><Status value={project.status} c={c} /></td></tr>)}
-        </tbody></table></div>
-      </div>
-      <div className="surface activity-panel"><div className="section-heading"><div><h2>{c.overview.recentWrites}</h2><p>{c.overview.recentWritesHint}</p></div></div>
-        <div className="activity-list">{recentWrites.length ? recentWrites.map(item => <div className="activity-item" key={item.eventId}><div className={`activity-icon ${item.knowledgeOperation === "conflict" ? "danger" : ""}`}>{item.artifactType === "learning_summary" ? <BookOpen size={18} /> : item.artifactType === "knowledge" ? <Library size={18} /> : <MessageSquareText size={18} />}</div><div><strong>{typeLabel(c, item.artifactType)}</strong><span>{item.target.split("/").slice(-2).join(" / ")}</span></div><time>{formatDate(item.occurredAt, data.locale)}</time></div>) : <Empty>{c.sync.empty}</Empty>}</div>
+      <div className="surface overview-panel">
+        <div className="overview-tabs" role="tablist">
+          <button role="tab" aria-selected={activeTab === "projects"} className={activeTab === "projects" ? "active" : ""} onClick={() => setActiveTab("projects")}>{c.overview.recentProjects}<b>{data.projects.length}</b></button>
+          <button role="tab" aria-selected={activeTab === "activity"} className={activeTab === "activity" ? "active" : ""} onClick={() => setActiveTab("activity")}>{c.overview.recentWrites}<b>{recentWrites.length}</b></button>
+          <button className="text-button overview-view-all" onClick={() => navigate(activeTab === "projects" ? "projects" : "activity")}>{c.overview.viewAll}<ChevronRight size={16} /></button>
+        </div>
+        {activeTab === "projects" ? <>
+          <div className="overview-context">{c.overview.recentProjectsHint}</div>
+          <div className="table-scroll overview-table"><table><thead><tr><th>{c.overview.projectName}</th><th>{c.overview.sourcePath}</th><th>{c.overview.lastRead}</th><th>{c.overview.content}</th><th>{c.common.status}</th></tr></thead><tbody>
+            {projectPage.visible.length ? projectPage.visible.map(project => <tr key={project.path} onClick={() => selectProject(project)}><td><span className="project-name"><Folder size={18} />{project.name}</span></td><td className="path-cell">{project.sourcePath ?? c.projects.noSource}</td><td>{formatDate(project.updatedAt, data.locale)}</td><td>{project.totalArtifacts}</td><td><Status value={project.status} c={c} /></td></tr>) : <tr><td className="table-empty" colSpan={5}>{c.projects.empty}</td></tr>}
+          </tbody></table></div>
+          <Pagination {...projectPage} c={c}/>
+        </> : <>
+          <div className="overview-context">{c.overview.recentWritesHint}</div>
+          <div className="activity-list overview-activity">{activityPage.visible.length ? activityPage.visible.map(({ item, count }) => <button className="activity-item" key={item.target} onClick={() => navigate("activity")}><div className={`activity-icon ${item.knowledgeOperation === "conflict" ? "danger" : ""}`}>{item.artifactType === "learning_summary" ? <BookOpen size={18} /> : item.artifactType === "knowledge" ? <Library size={18} /> : <MessageSquareText size={18} />}</div><div><strong>{typeLabel(c, item.artifactType)}{count > 1 ? ` · ${count} ${c.overview.updatedTimes}` : ""}</strong><span>{item.target.split("/").slice(-2).join(" / ")}</span></div><time>{formatDate(item.occurredAt, data.locale)}</time></button>) : <Empty>{c.sync.empty}</Empty>}</div>
+          <Pagination {...activityPage} c={c}/>
+        </>}
       </div>
     </section>
   </>;
 }
 
 function Projects({ data, c, selectProject, add }: { data: OverviewData; c: Copy; selectProject: (p: ProjectRecord) => void; add: () => void }) {
-  return <><Header title={c.projects.title} subtitle={c.projects.subtitle}><button className="button primary" onClick={add}><Plus size={18} />{c.projects.add}</button></Header><div className="project-cards">{data.projects.map(project => <article className="project-card" key={project.path} onClick={() => selectProject(project)}><div className="project-card-top"><div className="folder-tile"><Folder size={23} /></div><Status value={project.status} c={c} /></div><h2>{project.name}</h2><p>{project.sourcePath ?? c.projects.noSource}</p><div className="project-stats"><span><b>{project.counts.sources ?? project.counts.conversations ?? 0}</b>{c.projects.conversation}</span><span><b>{project.counts.summaries ?? 0}</b>{c.projects.summary}</span><span><b>{project.counts.knowledge ?? 0}</b>{c.projects.knowledge}</span><span><b>{project.counts.outputs ?? 0}</b>{c.projects.output}</span></div></article>)}</div></>;
+  const pagination = usePagination(data.projects, 10);
+  return <><Header title={c.projects.title} subtitle={c.projects.subtitle}><button className="button primary" onClick={add}><Plus size={18} />{c.projects.add}</button></Header>{pagination.visible.length ? <div className="project-cards">{pagination.visible.map(project => <button type="button" className="project-card" key={project.path} onClick={() => selectProject(project)}><div className="project-card-top"><div className="folder-tile"><Folder size={23} /></div><Status value={project.status} c={c} /></div><h2>{project.name}</h2><p>{project.sourcePath ?? c.projects.noSource}</p><div className="project-stats"><span><b>{project.counts.sources ?? project.counts.conversations ?? 0}</b>{c.projects.conversation}</span><span><b>{project.counts.summaries ?? 0}</b>{c.projects.summary}</span><span><b>{project.counts.knowledge ?? 0}</b>{c.projects.knowledge}</span><span><b>{project.counts.outputs ?? 0}</b>{c.projects.output}</span></div></button>)}</div> : <div className="surface"><Empty>{c.projects.empty}</Empty></div>}<Pagination {...pagination} c={c}/></>;
+}
+
+function UnclassifiedPage({ data, c, assign, assigning }: { data: OverviewData; c: Copy; assign: (artifact: ArtifactRecord, project: string) => Promise<void>; assigning: string | null }) {
+  const items = data.artifacts.filter(item => !item.project);
+  const pagination = usePagination(items, 10);
+  const [projects, setProjects] = useState<Record<string, string>>({});
+  return <><Header title={c.triage.title} subtitle={c.triage.subtitle}/><datalist id="project-suggestions">{data.projects.map(project => <option value={project.name} key={project.name}/>)}</datalist><div className="surface triage-list">{pagination.visible.length ? pagination.visible.map(item => {
+    const project = projects[item.path] ?? "";
+    return <article className="triage-row" key={item.path}><div className="artifact-symbol"><MessageSquareText size={20}/></div><div className="triage-content"><strong>{item.title}</strong><span>{c.triage.source} · {item.sourceThreadId ?? c.common.none}</span><code>{c.triage.storedAt}：{item.path}</code></div><label><span>{c.triage.project}</span><input list="project-suggestions" value={project} onChange={event => setProjects(current => ({ ...current, [item.path]: event.target.value }))} placeholder={c.triage.projectPlaceholder}/></label><button className="button primary" disabled={!project.trim() || assigning === item.path} onClick={() => assign(item, project)}>{assigning === item.path ? <LoaderCircle className="spin" size={17}/> : <Folder size={17}/>} {c.triage.assign}</button></article>;
+  }) : <Empty>{c.triage.empty}</Empty>}</div><Pagination {...pagination} c={c}/></>;
 }
 
 function ArtifactPage({ data, c, type, title, subtitle, selectArtifact }: { data: OverviewData; c: Copy; type: string; title: string; subtitle: string; selectArtifact: (a: ArtifactRecord) => void }) {
@@ -109,14 +152,16 @@ function ArtifactPage({ data, c, type, title, subtitle, selectArtifact }: { data
   const aliases = type === "conversation" ? ["conversation", "source"] : [type];
   const normalized = query.trim().toLocaleLowerCase();
   const items = data.artifacts.filter(item => aliases.includes(item.type) && (!normalized || `${item.title} ${item.project ?? ""} ${item.path}`.toLocaleLowerCase().includes(normalized)));
-  return <><Header title={title} subtitle={subtitle}><label className="search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`${c.artifacts.search} ${title}`} /></label></Header><div className="surface artifact-list">{items.length ? items.map(item => <button key={item.path} className="artifact-row" onClick={() => selectArtifact(item)}><div className="artifact-symbol">{type === "conversation" ? <MessageSquareText size={20} /> : <BookOpen size={20} />}</div><div><strong>{item.title}</strong><span>{item.project} · {item.path}</span></div><div className="artifact-meta"><Status value={item.status ?? "active"} c={c} /><time>{formatDate(item.updatedAt, data.locale)}</time></div><ChevronRight size={18} /></button>) : <Empty>{c.artifacts.empty} {title}</Empty>}</div></>;
+  const pagination = usePagination(items, 10, query);
+  return <><Header title={title} subtitle={subtitle}><label className="search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`${c.artifacts.search} ${title}`} /></label></Header><div className="surface artifact-list">{pagination.visible.length ? pagination.visible.map(item => <button key={item.path} className="artifact-row" onClick={() => selectArtifact(item)}><div className="artifact-symbol">{type === "conversation" ? <MessageSquareText size={20} /> : <BookOpen size={20} />}</div><div><strong>{item.title}</strong><span>{item.project ?? c.nav.unclassified} · {item.path}</span></div><div className="artifact-meta"><Status value={item.status ?? "active"} c={c} /><time>{formatDate(item.updatedAt, data.locale)}</time></div><ChevronRight size={18} /></button>) : <Empty>{c.artifacts.empty} {title}</Empty>}</div><Pagination {...pagination} c={c}/></>;
 }
 
 function Knowledge({ data, c, selectArtifact }: { data: OverviewData; c: Copy; selectArtifact: (a: ArtifactRecord) => void }) {
   const [filter, setFilter] = useState("all");
   const items = data.artifacts.filter(item => item.type === "knowledge" && (filter === "all" || item.status === filter || item.knowledgeOperation === filter));
   const filters = [["all", c.knowledge.all], ["candidate", c.knowledge.candidate], ["validated", c.knowledge.validated], ["conflict", c.knowledge.conflict], ["superseded", c.knowledge.superseded]];
-  return <><Header title={c.knowledge.title} subtitle={c.knowledge.subtitle}><button className="button" onClick={() => setFilter("conflict")}><GitMerge size={18} />{c.knowledge.merge}</button></Header><div className="filter-bar">{filters.map(([id, label]) => <button key={id} className={filter === id ? "active" : ""} onClick={() => setFilter(id)}>{label}<span>{id === "all" ? data.artifactsByType.knowledge ?? 0 : data.artifactsByStatus[id] ?? data.artifacts.filter(a => a.knowledgeOperation === id).length}</span></button>)}</div><div className="surface knowledge-list">{items.length ? items.map(item => <button className="knowledge-row" key={item.path} onClick={() => selectArtifact(item)}><div className={`knowledge-op ${item.knowledgeOperation ?? "add"}`}>{item.knowledgeOperation === "conflict" ? <AlertTriangle size={19} /> : item.knowledgeOperation === "merge" ? <GitMerge size={19} /> : <Sparkles size={19} />}</div><div><strong>{item.title}</strong><span>{item.project} · {c.knowledge.operation}: {item.knowledgeOperation ?? c.knowledge.add}</span></div><Status value={item.status ?? "candidate"} c={c} /><ChevronRight size={18} /></button>) : <Empty>{c.artifacts.empty} {c.knowledge.title}</Empty>}</div></>;
+  const pagination = usePagination(items, 10, filter);
+  return <><Header title={c.knowledge.title} subtitle={c.knowledge.subtitle}><button className="button" onClick={() => setFilter("conflict")}><GitMerge size={18} />{c.knowledge.merge}</button></Header><div className="filter-bar">{filters.map(([id, label]) => <button key={id} className={filter === id ? "active" : ""} onClick={() => setFilter(id)}>{label}<span>{id === "all" ? data.artifactsByType.knowledge ?? 0 : data.artifactsByStatus[id] ?? data.artifacts.filter(a => a.knowledgeOperation === id).length}</span></button>)}</div><div className="surface knowledge-list">{pagination.visible.length ? pagination.visible.map(item => <button className="knowledge-row" key={item.path} onClick={() => selectArtifact(item)}><div className={`knowledge-op ${item.knowledgeOperation ?? "add"}`}>{item.knowledgeOperation === "conflict" ? <AlertTriangle size={19} /> : item.knowledgeOperation === "merge" ? <GitMerge size={19} /> : <Sparkles size={19} />}</div><div><strong>{item.title}</strong><span>{item.project} · {c.knowledge.operation}: {item.knowledgeOperation ?? c.knowledge.add}</span></div><Status value={item.status ?? "candidate"} c={c} /><ChevronRight size={18} /></button>) : <Empty>{c.artifacts.empty} {c.knowledge.title}</Empty>}</div><Pagination {...pagination} c={c}/></>;
 }
 
 function ActivityPage({ data, c }: { data: OverviewData; c: Copy }) {
@@ -124,7 +169,9 @@ function ActivityPage({ data, c }: { data: OverviewData; c: Copy }) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data.activity, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `oca-duplex-activity-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url);
   }
-  return <><Header title={c.activity.title} subtitle={c.activity.subtitle}><button className="button" onClick={exportActivity}><FileOutput size={18} />{c.activity.export}</button></Header><div className="surface audit-table"><table><thead><tr><th>{c.activity.time}</th><th>{c.activity.operation}</th><th>{c.activity.type}</th><th>{c.activity.target}</th><th>{c.activity.result}</th><th>{c.activity.transaction}</th></tr></thead><tbody>{data.activity.map(item => <tr key={item.eventId}><td>{formatDate(item.occurredAt, data.locale)}</td><td>{item.operation}</td><td>{typeLabel(c, item.artifactType)}</td><td className="path-cell">{item.target}</td><td><Status value={item.outcome} c={c} /></td><td><code>{item.transactionId}</code></td></tr>)}</tbody></table></div></>;
+  const pagination = usePagination(data.activity, 20);
+  const operationLabel = (value: string) => c.operations[value as keyof typeof c.operations] ?? value.replaceAll("_", " ");
+  return <><Header title={c.activity.title} subtitle={c.activity.subtitle}><button className="button" onClick={exportActivity}><FileOutput size={18} />{c.activity.export}</button></Header>{pagination.visible.length ? <div className="surface audit-table"><table><thead><tr><th>{c.activity.time}</th><th>{c.activity.operation}</th><th>{c.activity.type}</th><th>{c.activity.target}</th><th>{c.activity.result}</th><th>{c.activity.transaction}</th></tr></thead><tbody>{pagination.visible.map(item => <tr key={item.eventId}><td>{formatDate(item.occurredAt, data.locale)}</td><td>{operationLabel(item.operation)}</td><td>{typeLabel(c, item.artifactType)}</td><td className="path-cell">{item.target}</td><td><Status value={item.outcome} c={c} /></td><td><code>{item.transactionId.slice(0, 8)}</code></td></tr>)}</tbody></table></div> : <div className="surface"><Empty>{c.activity.subtitle}</Empty></div>}<Pagination {...pagination} c={c}/></>;
 }
 
 function SettingsPage({ data, c, reload }: { data: OverviewData; c: Copy; reload: () => Promise<void> }) {
@@ -168,14 +215,14 @@ function SettingsPage({ data, c, reload }: { data: OverviewData; c: Copy; reload
   </div></>;
 }
 
-function Inspector({ project, artifact, data, c, reviewing, review, reviewProject }: { project: ProjectRecord | null; artifact: ArtifactRecord | null; data: OverviewData; c: Copy; reviewing: boolean; review: (artifact: ArtifactRecord, action: ReviewAction) => void; reviewProject: () => void }) {
+function Inspector({ project, artifact, data, c, reviewing, review, reviewProject, close }: { project: ProjectRecord | null; artifact: ArtifactRecord | null; data: OverviewData; c: Copy; reviewing: boolean; review: (artifact: ArtifactRecord, action: ReviewAction) => void; reviewProject: () => void; close: () => void }) {
   const title = artifact?.title ?? project?.name ?? c.inspector.title;
   const path = artifact?.path ?? project?.path ?? data.vaultRoot;
   const folders = [c.types.conversation, c.types.learning_summary, c.nav.knowledge, c.types.prompt, c.types.output, c.types.decision, c.nav.activity];
   const canValidate = artifact?.type === "knowledge" && ["candidate", "conflict"].includes(artifact.status ?? "");
   const canArchive = artifact?.type === "knowledge" && ["candidate", "validated", "conflict"].includes(artifact.status ?? "");
   const pendingCount = project ? data.artifacts.filter(item => item.project === project.name && ["candidate", "conflict"].includes(item.status ?? "")).length : 0;
-  return <aside className="inspector"><div className="inspector-header"><div className="inspector-mark">{artifact ? <BookOpen size={21} /> : <Bot size={21} />}</div><div><h2>{title}</h2><p>{artifact ? `${c.inspector.artifactInspector} · ${typeLabel(c, artifact.type)}` : project ? c.inspector.projectInspector : c.inspector.title}</p></div><span className="health-dot" /></div><section><label>{c.inspector.targetPath}</label><code>{path}</code></section>{project && <section><label>{c.inspector.sourceWorkspace}</label><code>{project.sourcePath ?? c.projects.noSource}</code></section>}{artifact ? <><section><label>{c.inspector.knowledgeStatus}</label><Status value={artifact.status ?? "active"} c={c} /></section><section><label>{c.inspector.sourceTask}</label><code>{artifact.sourceThreadId ?? c.common.none}</code></section>{artifact.type === "knowledge" && <div className="review-actions">{canValidate && <button className="button primary" disabled={reviewing} onClick={() => review(artifact, "validate")}><Check size={17}/>{c.knowledge.validate}</button>}{canArchive && <button className="button danger" disabled={reviewing} onClick={() => review(artifact, artifact.status === "validated" ? "supersede" : "archive")}><Archive size={17}/>{artifact.status === "validated" ? c.knowledge.markSuperseded : c.knowledge.archive}</button>}</div>}</> : <><section><label>{c.inspector.vaultStructure}</label><div className="folder-tree"><b><Folder size={17} />{project?.name ?? c.inspector.project}</b>{folders.map(item => <span key={item}>{item}</span>)}</div></section>{pendingCount > 0 && <button className="button review-project" onClick={reviewProject}><ListChecks size={17}/>{pendingCount} · {c.knowledge.reviewProject}</button>}</>}<section><label>{c.inspector.recentTransaction}</label><code>{data.activity[0]?.transactionId ?? c.common.none} · {c.statuses.completed}</code></section><button className="button primary inspector-action" onClick={() => desktopAction("open_artifact", { path })}><FolderOpen size={18} />{c.inspector.open}</button></aside>;
+  return <aside className="inspector"><div className="inspector-header"><div className="inspector-mark">{artifact ? <BookOpen size={21} /> : <Bot size={21} />}</div><div><h2>{title}</h2><p>{artifact ? `${c.inspector.artifactInspector} · ${typeLabel(c, artifact.type)}` : project ? c.inspector.projectInspector : c.inspector.title}</p></div><button className="inspector-close" aria-label={c.common.close} onClick={close}><X size={18}/></button></div><section><label>{c.inspector.targetPath}</label><code>{path}</code></section>{project && <section><label>{c.inspector.sourceWorkspace}</label><code>{project.sourcePath ?? c.projects.noSource}</code></section>}{artifact ? <><section><label>{c.inspector.knowledgeStatus}</label><Status value={artifact.status ?? "active"} c={c} /></section><section><label>{c.inspector.sourceTask}</label><code>{artifact.sourceThreadId ?? c.common.none}</code></section>{artifact.type === "knowledge" && <div className="review-actions">{canValidate && <button className="button primary" disabled={reviewing} onClick={() => review(artifact, "validate")}><Check size={17}/>{c.knowledge.validate}</button>}{canArchive && <button className="button danger" disabled={reviewing} onClick={() => review(artifact, artifact.status === "validated" ? "supersede" : "archive")}><Archive size={17}/>{artifact.status === "validated" ? c.knowledge.markSuperseded : c.knowledge.archive}</button>}</div>}</> : <><section><label>{c.inspector.vaultStructure}</label><div className="folder-tree"><b><Folder size={17} />{project?.name ?? c.inspector.project}</b>{folders.map(item => <span key={item}>{item}</span>)}</div></section>{pendingCount > 0 && <button className="button review-project" onClick={reviewProject}><ListChecks size={17}/>{pendingCount} · {c.knowledge.reviewProject}</button>}</>}<section><label>{c.inspector.recentTransaction}</label><code>{data.activity[0]?.transactionId ?? c.common.none} · {c.statuses.completed}</code></section><button className="button primary inspector-action" onClick={() => desktopAction("open_artifact", { path })}><FolderOpen size={18} />{c.inspector.open}</button></aside>;
 }
 
 function SetupWizard({ complete }: { complete: () => Promise<void> }) {
@@ -236,6 +283,7 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [assigning, setAssigning] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: "success" | "info"; title: string; message: string } | null>(null);
   const [listenerState, setListenerState] = useState<ListenerState>("paused");
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
@@ -262,7 +310,7 @@ export default function App() {
     replaceQueue([...current.values()]);
     return added;
   }
-  async function reload() { setError(null); try { const result = await loadOverview(); setData(result); setSelectedProject(current => current ? result.projects.find(item => item.path === current.path) ?? null : result.projects[0] ?? null); setSelectedArtifact(current => current ? result.artifacts.find(item => item.path === current.path) ?? null : null); setNeedsSetup(false); } catch (reason) { const text = String(reason); if (/config|配置|Vault|找不到/i.test(text)) setNeedsSetup(true); else setError(text); } }
+  async function reload() { setError(null); try { const result = await loadOverview(); setData(result); setSelectedProject(current => current ? result.projects.find(item => item.path === current.path) ?? null : null); setSelectedArtifact(current => current ? result.artifacts.find(item => item.path === current.path) ?? null : null); setNeedsSetup(false); } catch (reason) { const text = String(reason); if (/config|配置|Vault|找不到/i.test(text)) setNeedsSetup(true); else setError(text); } }
   useEffect(() => { reload(); }, []);
   const locale = data?.locale ?? "zh-CN";
   const c = getCopy(locale);
@@ -340,21 +388,35 @@ export default function App() {
     catch (reason) { setSyncError(String(reason)); }
     finally { setReviewing(false); }
   }
+  async function assignArtifact(artifact: ArtifactRecord, project: string) {
+    setAssigning(artifact.path); setSyncError(null);
+    try {
+      await assignArtifactToProject(artifact.path, project.trim());
+      await reload();
+      setNotice({ tone: "success", title: c.triage.assigned, message: `${artifact.title} → ${project.trim()}` });
+    } catch (reason) { setSyncError(String(reason)); }
+    finally { setAssigning(null); }
+  }
   if (error) return <div className="fatal"><AlertTriangle /><h1>{c.fatal}</h1><p>{error}</p></div>;
   if (needsSetup) return <SetupWizard complete={reload} />;
   if (!data) return <div className="loading"><LoaderCircle className="spin" /><span>{c.loading}</span></div>;
-  const openSettings = () => setView("settings");
+  const navigate = (next: ViewId) => { setView(next); setSelectedProject(null); setSelectedArtifact(null); };
+  const closeInspector = () => { setSelectedProject(null); setSelectedArtifact(null); };
+  const openSettings = () => navigate("settings");
   const listenerLabel = listenerState === "scanning" ? c.system.scanning : listenerState === "listening" ? c.system.listening : listenerState === "manual" ? c.system.manual : listenerState === "error" ? c.system.attention : c.system.paused;
   const scopeLabel = data.mode === "all" ? c.system.scopeAll : data.mode === "manual" ? c.system.scopeManual : `${data.workspaceMappings.length} ${c.system.authorized}`;
-  return <><div className="shell"><aside className="sidebar"><div className="brand"><div className="brand-mark"><Waypoints size={21} /></div><div><strong>OCA-Duplex</strong><span>{c.brand}</span></div></div><nav>{nav.map(([id, Icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={20} /><span>{c.nav[id]}</span>{id === "knowledge" && (data.artifactsByStatus.candidate ?? 0) > 0 && <em>{data.artifactsByStatus.candidate}</em>}</button>)}</nav><div className="system-card"><div><ShieldCheck size={19} /><span>{systemLabel}</span></div><strong><i className={listenerState === "error" ? "error" : listenerState === "paused" || listenerState === "manual" ? "paused" : ""}/>{listenerLabel}</strong><small>{scopeLabel}</small>{lastScanAt && <small>{c.system.lastScan}：{formatDate(lastScanAt, locale)}</small>}<small className={data.integration?.available ? "integration-ok" : "integration-warning"}>{data.integration?.available ? c.system.ready : c.system.attention}</small></div></aside><main className="content">
-    {view === "overview" && <Overview data={data} c={c} selectProject={project => { setSelectedProject(project); setSelectedArtifact(null); }} sync={sync} syncing={syncing} refresh={reload} openSettings={openSettings} openProjects={() => setView("projects")} />}
+  const showInspector = view !== "overview" && Boolean(selectedProject || selectedArtifact);
+  const shellClass = view === "overview" ? "shell overview-shell" : showInspector ? "shell detail-open" : "shell";
+  return <><div className={shellClass}><aside className="sidebar"><div className="brand"><div className="brand-mark"><Waypoints size={21} /></div><div><strong>OCA-Duplex</strong><span>{c.brand}</span></div></div><nav>{nav.map(([id, Icon]) => <button key={id} className={view === id ? "active" : ""} onClick={() => navigate(id)}><Icon size={20} /><span>{c.nav[id]}</span>{id === "unclassified" && data.unclassifiedCount > 0 && <em>{data.unclassifiedCount}</em>}{id === "knowledge" && (data.artifactsByStatus.candidate ?? 0) > 0 && <em>{data.artifactsByStatus.candidate}</em>}</button>)}</nav><div className="system-card"><div><ShieldCheck size={19} /><span>{systemLabel}</span></div><strong><i className={listenerState === "error" ? "error" : listenerState === "paused" || listenerState === "manual" ? "paused" : ""}/>{listenerLabel}</strong><small>{scopeLabel}</small>{lastScanAt && <small>{c.system.lastScan}：{formatDate(lastScanAt, locale)}</small>}<small className={data.integration?.available ? "integration-ok" : "integration-warning"}>{data.integration?.available ? c.system.ready : c.system.attention}</small></div></aside><main className="content">
+    {view === "overview" && <Overview data={data} c={c} selectProject={project => { navigate("projects"); setSelectedProject(project); }} sync={sync} syncing={syncing} refresh={reload} openSettings={openSettings} navigate={navigate} />}
     {view === "projects" && <Projects data={data} c={c} selectProject={project => { setSelectedProject(project); setSelectedArtifact(null); }} add={openSettings} />}
+    {view === "unclassified" && <UnclassifiedPage data={data} c={c} assign={assignArtifact} assigning={assigning}/>}
     {view === "conversations" && <ArtifactPage data={data} c={c} type="conversation" title={c.artifacts.conversationsTitle} subtitle={c.artifacts.conversationsSubtitle} selectArtifact={artifact => { setSelectedArtifact(artifact); setSelectedProject(null); }} />}
     {view === "summaries" && <ArtifactPage data={data} c={c} type="learning_summary" title={c.artifacts.summariesTitle} subtitle={c.artifacts.summariesSubtitle} selectArtifact={artifact => { setSelectedArtifact(artifact); setSelectedProject(null); }} />}
     {view === "knowledge" && <Knowledge data={data} c={c} selectArtifact={artifact => { setSelectedArtifact(artifact); setSelectedProject(null); }} />}
     {view === "activity" && <ActivityPage data={data} c={c} />}
     {view === "settings" && <SettingsPage data={data} c={c} reload={reload} />}
-  </main>{view === "overview" ? <MonitorPanel reports={syncReports} events={monitorEvents} state={listenerState} lastScanAt={lastScanAt} busy={syncing} writeOne={report => confirmSync([report])} writeAll={() => confirmSync()} ignoreOne={ignoreSync} c={c} locale={locale}/> : <Inspector project={selectedProject} artifact={selectedArtifact} data={data} c={c} reviewing={reviewing} review={reviewArtifact} reviewProject={() => setView("knowledge")} />}</div>
+  </main>{view === "overview" ? <MonitorPanel reports={syncReports} events={monitorEvents} state={listenerState} lastScanAt={lastScanAt} busy={syncing} writeOne={report => confirmSync([report])} writeAll={() => confirmSync()} ignoreOne={ignoreSync} c={c} locale={locale}/> : showInspector ? <Inspector project={selectedProject} artifact={selectedArtifact} data={data} c={c} reviewing={reviewing} review={reviewArtifact} reviewProject={() => navigate("knowledge")} close={closeInspector}/> : null}</div>
   {threadPicker && <ThreadPicker threads={threads} loading={threadsLoading} close={() => setThreadPicker(false)} preview={runPreview} c={c} />}
   {notice && <Notice {...notice} close={() => setNotice(null)} />}
   {syncError && <div className="toast-error"><AlertTriangle size={19}/><div><b>{c.sync.failed}</b><span>{syncError}</span></div><button onClick={() => setSyncError(null)}><X size={17}/></button></div>}</>;

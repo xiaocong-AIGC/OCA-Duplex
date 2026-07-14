@@ -145,7 +145,7 @@ export function extractContentUnits({ snapshot = null, text = "", projectName = 
   const threadId = snapshot?.thread?.id ?? "source";
   const turnId = snapshot?.turn?.id ?? "backfill";
   const context = `${projectName}\n${title}\n${body}`;
-  const digestTitle = generateTitle({ kind: "digest", text: context, projectName, fallback: `${projectName} 学习总结` });
+  const digestTitle = generateTitle({ kind: "digest", text: context, projectName, fallback: `${projectName} 复盘总结` });
   const common = {
     category: "content_digest",
     tags: semanticTags(`${projectName}\n${body}`),
